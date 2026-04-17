@@ -1,0 +1,75 @@
+{
+  "features_numericas": [
+    "Faixas de Rodagem",
+    "Largura Via 1",
+    "Largura Via 2",
+    "largura Canteiro Central",
+    "altura da luminaria",
+    "projecao do braço",
+    "distancia entre postes",
+    "distancia Poste a via",
+    "Altura de Instalação"
+  ],
+  "features_categoricas": [
+    "Tipo de estrutura",
+    "posteacao",
+    "Braço Novo",
+    "Fornecedor"
+  ],
+  "modelo_lm": {
+    "modelo": "RandomForest",
+    "target": "Fluxo Luminoso - IP Principal (lm)",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via",
+      "Altura de Instalação"
+    ],
+    "features_categoricas": [
+      "Tipo de estrutura",
+      "posteacao",
+      "Braço Novo",
+      "Fornecedor"
+    ],
+    "r2_cv": 0.6489,
+    "mae_cv": 1430.17,
+    "r2_teste": 0.8449,
+    "mae_teste": 946.11,
+    "rmse_teste": 1434.34,
+    "n_amostras_treino": 770,
+    "n_amostras_teste": 193
+  },
+  "modelo_w": {
+    "modelo": "RandomForest",
+    "target": "Potencia simulada - IP Principal (W)",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via",
+      "Altura de Instalação"
+    ],
+    "features_categoricas": [
+      "Tipo de estrutura",
+      "posteacao",
+      "Braço Novo",
+      "Fornecedor"
+    ],
+    "r2_cv": 0.6453,
+    "mae_cv": 8.78,
+    "r2_teste": 0.8619,
+    "mae_teste": 5.65,
+    "rmse_teste": 8.68,
+    "n_amostras_treino": 770,
+    "n_amostras_teste": 193
+  }
+}
