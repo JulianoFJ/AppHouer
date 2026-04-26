@@ -1,10 +1,10 @@
 """
 02_treinar_modelo.py
 ---------------------
-Le o dataset.csv, treina dois modelos de Random Forest:
-  - modelo_lux.pkl   → preve Iluminância Média (lux)
-  - modelo_w.pkl    → preve Potencia simulada (W)
-Salva tambem features.json com metadados de ambos.
+Treina modelos para o dataset bruto (dataset.csv) e para o dataset sem outliers (dataset_limpo.csv).
+Salva modelos com prefixos correspondentes:
+  - modelo_{key}.pkl        (Bruto)
+  - modelo_{key}_limpo.pkl  (Limpo)
 """
 
 import sys
@@ -30,8 +30,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import joblib
 
 # ── Configurações ─────────────────────────────────────────────────────────────
-PASTA   = r'c:\Users\julia\OneDrive\Área de Trabalho\Houer\ML - Simulação'
-DATASET = os.path.join(PASTA, 'dataset.csv')
+PASTA = r'c:\Users\julia\OneDrive\Área de Trabalho\Houer\ML - Simulação'
 
 TARGETS_INFO = {
     'lmed': ('Luminância Média', 'cd/m²'),
@@ -53,162 +52,100 @@ FEATURES_NUMERICAS = [
     'projecao do braço',
     'distancia entre postes',
     'distancia Poste a via',
-    'Altura de Instalação',
+    # 'Altura de Instalação'  # REMOVIDA
 ]
 
 FEATURES_CATEGORICAS = [
-    'Classificação viária',   # C0-C5, M1-M6, P4-P6
+    'Classificação viária',
     'Tipo de estrutura',
     'posteacao',
     'Braço Novo',
     'Fornecedor',
 ]
 
-# ── Carrega dados ─────────────────────────────────────────────────────────────
-print('[INFO] Carregando dataset...')
-df = pd.read_csv(DATASET, encoding='utf-8-sig')
-print(f'   {len(df)} linhas carregadas')
+def treinar_e_salvar(dataset_name, suffix=""):
+    DATASET = os.path.join(PASTA, dataset_name)
+    print(f'\n\n{"#"*80}')
+    print(f'### TREINANDO PARA: {dataset_name} (Sufixo: {suffix})')
+    print(f'{"#"*80}')
 
-num_ok = [c for c in FEATURES_NUMERICAS  if c in df.columns]
-cat_ok = [c for c in FEATURES_CATEGORICAS if c in df.columns]
-all_features = num_ok + cat_ok
+    if not os.path.exists(DATASET):
+        print(f'[ERRO] Arquivo {DATASET} não encontrado!')
+        return
 
-print(f'\n[INFO] Features numericas  ({len(num_ok)}): {num_ok}')
-print(f'[INFO] Features categoricas ({len(cat_ok)}): {cat_ok}')
-print(f'\n[INFO] Distribuicao de Fornecedor:')
-if 'Fornecedor' in df.columns:
-    print(df['Fornecedor'].value_counts().to_string())
+    df = pd.read_csv(DATASET, encoding='utf-8-sig')
+    print(f'[INFO] {len(df)} linhas carregadas')
 
-# ── Pré-processamento (compartilhado) ─────────────────────────────────────────
-num_transformer = Pipeline([
-    ('imputer', SimpleImputer(strategy='median')),
-    ('scaler',  StandardScaler()),
-])
-cat_transformer = Pipeline([
-    ('imputer', SimpleImputer(strategy='most_frequent')),
-    ('onehot',  OneHotEncoder(handle_unknown='ignore', sparse_output=False)),
-])
-preprocessor = ColumnTransformer([
-    ('num', num_transformer, num_ok),
-    ('cat', cat_transformer, cat_ok),
-])
+    num_ok = [c for c in FEATURES_NUMERICAS  if c in df.columns]
+    cat_ok = [c for c in FEATURES_CATEGORICAS if c in df.columns]
+    all_features = num_ok + cat_ok
 
-# ── Modelos candidatos ────────────────────────────────────────────────────────
-def get_modelos():
-    return {
-        'RandomForest': RandomForestRegressor(
-            n_estimators=300, max_depth=None, min_samples_leaf=2,
-            random_state=42, n_jobs=-1
-        ),
-        'HistGradientBoosting': HistGradientBoostingRegressor(
-            max_iter=300, learning_rate=0.05, max_depth=6, random_state=42
-        ),
-        'Ridge': Ridge(alpha=10.0),
-    }
+    # Pré-processamento
+    num_transformer = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler',  StandardScaler()),
+    ])
+    cat_transformer = Pipeline([
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('onehot',  OneHotEncoder(handle_unknown='ignore', sparse_output=False)),
+    ])
+    preprocessor = ColumnTransformer([
+        ('num', num_transformer, num_ok),
+        ('cat', cat_transformer, cat_ok),
+    ])
 
-# ── Função de treino/avaliação ────────────────────────────────────────────────
-def treinar(df_base, target_col, label, label_unit):
-    """Treina e avalia modelos para um target. Retorna o melhor pipeline."""
-    if target_col not in df_base.columns:
-        print(f'\n[AVISO] Coluna "{target_col}" nao encontrada no dataset. Pulando.')
-        return None, {}
+    def get_modelos():
+        return {
+            'RandomForest': RandomForestRegressor(n_estimators=300, max_depth=None, min_samples_leaf=2, random_state=42, n_jobs=-1),
+            'HistGradientBoosting': HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_depth=6, random_state=42),
+            'Ridge': Ridge(alpha=10.0),
+        }
 
-    df_t = df_base.dropna(subset=[target_col]).copy()
-    df_t = df_t[df_t[target_col] > 0]
-    print(f'\n{"="*60}')
-    print(f'[TREINO] Target: {label} ({target_col})')
-    print(f'         Amostras: {len(df_t)}')
-    print(f'{"="*60}')
+    modelos_treinados = {}
+    meta_geral = {'features_numericas': num_ok, 'features_categoricas': cat_ok}
 
-    X = df_t[all_features].copy()
-    y = df_t[target_col].copy()
+    for key, (coluna, unidade) in TARGETS_INFO.items():
+        if coluna not in df.columns: continue
+        
+        df_t = df.dropna(subset=[coluna]).copy()
+        df_t = df_t[df_t[coluna] > 0]
+        if len(df_t) < 10: continue
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
+        print(f'\n[TREINO] {key.upper()} | {len(df_t)} amostras')
+        X = df_t[all_features]
+        y = df_t[coluna]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    print('\n[CV] Avaliacao Cross-Validation (5-fold):\n')
-    resultados = {}
-    for nome, estimador in get_modelos().items():
-        pipe = Pipeline([('prep', clone(preprocessor)), ('model', estimador)])
-        scores_r2  = cross_val_score(pipe, X_train, y_train, cv=5, scoring='r2', n_jobs=-1)
-        scores_mae = cross_val_score(pipe, X_train, y_train, cv=5,
-                                      scoring='neg_mean_absolute_error', n_jobs=-1)
-        r2_m  = scores_r2.mean()
-        mae_m = -scores_mae.mean()
-        resultados[nome] = {'R2': r2_m, 'MAE': mae_m, 'pipe': pipe}
-        unidade = label_unit
-        print(f'  {nome:30s} | R2 = {r2_m:.4f} | MAE = {mae_m:.1f} {unidade}')
+        resultados = {}
+        for nome, estimador in get_modelos().items():
+            pipe = Pipeline([('prep', clone(preprocessor)), ('model', estimador)])
+            scores_r2 = cross_val_score(pipe, X_train, y_train, cv=5, scoring='r2', n_jobs=-1)
+            resultados[nome] = {'R2': scores_r2.mean(), 'pipe': pipe}
+            print(f'  {nome:25s} | R2 CV = {scores_r2.mean():.4f}')
 
-    melhor_nome = max(resultados, key=lambda k: resultados[k]['R2'])
-    melhor_pipe  = resultados[melhor_nome]['pipe']
-    print(f'\n[RESULTADO] Melhor modelo: {melhor_nome} (R2 CV = {resultados[melhor_nome]["R2"]:.4f})')
+        melhor_nome = max(resultados, key=lambda k: resultados[k]['R2'])
+        melhor_pipe = resultados[melhor_nome]['pipe']
+        melhor_pipe.fit(X_train, y_train)
 
-    melhor_pipe.fit(X_train, y_train)
-    y_pred = melhor_pipe.predict(X_test)
-    mae  = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    r2   = r2_score(y_test, y_pred)
+        # Avalia no teste
+        y_pred = melhor_pipe.predict(X_test)
+        r2 = r2_score(y_test, y_pred)
+        mae = mean_absolute_error(y_test, y_pred)
+        print(f'  >> MELHOR: {melhor_nome} | R2 Teste = {r2:.4f} | MAE = {mae:.2f}')
 
-    unidade = label_unit
-    print(f'\n[METRICAS] Conjunto de teste ({len(X_test)} amostras):')
-    print(f'   MAE  = {mae:.1f} {unidade}')
-    print(f'   RMSE = {rmse:.1f} {unidade}')
-    print(f'   R2   = {r2:.4f}')
+        # Salva
+        path_mod = os.path.join(PASTA, f'modelo_{key}{suffix}.pkl')
+        joblib.dump(melhor_pipe, path_mod)
+        modelos_treinados[key] = path_mod
+        meta_geral[f'modelo_{key}'] = {'r2': round(r2, 4), 'mae': round(mae, 2), 'type': melhor_nome}
 
-    # Importância
-    if hasattr(melhor_pipe['model'], 'feature_importances_'):
-        try:
-            feat_names   = melhor_pipe['prep'].get_feature_names_out()
-            importancias = melhor_pipe['model'].feature_importances_
-            imp_df = pd.DataFrame({'feature': feat_names, 'importancia': importancias})
-            imp_df = imp_df.sort_values('importancia', ascending=False).head(10)
-            print('\n[TOP-10] Features mais importantes:')
-            print(imp_df.to_string(index=False))
-        except Exception as e:
-            print(f'   (erro ao extrair importancias: {e})')
+    meta_path = os.path.join(PASTA, f'features{suffix}.json')
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(meta_geral, f, ensure_ascii=False, indent=2)
+    print(f'\n[OK] {len(modelos_treinados)} modelos salvos para {dataset_name}')
 
-    meta = {
-        'modelo': melhor_nome,
-        'target': target_col,
-        'features_numericas':  num_ok,
-        'features_categoricas': cat_ok,
-        'r2_cv':     round(resultados[melhor_nome]['R2'],  4),
-        'mae_cv':    round(resultados[melhor_nome]['MAE'], 2),
-        'r2_teste':  round(r2,   4),
-        'mae_teste': round(mae,  2),
-        'rmse_teste':round(rmse, 2),
-        'n_amostras_treino': len(X_train),
-        'n_amostras_teste':  len(X_test),
-    }
-    return melhor_pipe, meta
+# ── Execução ──────────────────────────────────────────────────────────────────
+treinar_e_salvar('dataset.csv', suffix="")
+treinar_e_salvar('dataset_limpo.csv', suffix="_limpo")
 
-# ── Treina todos os modelos ───────────────────────────────────────────────────
-modelos_treinados = {}
-meta_geral = {
-    'features_numericas':  num_ok,
-    'features_categoricas': cat_ok,
-}
-
-for key, (coluna, unidade) in TARGETS_INFO.items():
-    if coluna in df.columns:
-        pipe, meta = treinar(df, coluna, f'{key.upper()} ({unidade})', unidade)
-        if pipe:
-            modelos_treinados[key] = pipe
-            meta_geral[f'modelo_{key}'] = meta
-
-# ── Salva modelos e metadados ─────────────────────────────────────────────────
-print(f'\n{"="*60}')
-print('[SALVANDO]')
-
-for key, pipe in modelos_treinados.items():
-    path_mod = os.path.join(PASTA, f'modelo_{key}.pkl')
-    joblib.dump(pipe, path_mod)
-    print(f'[OK] Modelo {key} salvo:  {path_mod}')
-
-features_path = os.path.join(PASTA, 'features.json')
-with open(features_path, 'w', encoding='utf-8') as f:
-    json.dump(meta_geral, f, ensure_ascii=False, indent=2)
-print(f'[OK] Metadados salvos: {features_path}')
-
-print('\n[DONE] Treinamento concluido!')
+print('\n[DONE] Treinamento completo!')

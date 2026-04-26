@@ -21,27 +21,100 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
+    /* Paleta Houer: Navy (#1B3664), Teal (#00A9E0) */
+    :root {
+        --houer-navy: #1B3664;
+        --houer-teal: #00A9E0;
+        --bg-dark: #0b111e;
+        --card-bg: #12192b;
+        --card-border: #1f2937;
+    }
+    
+    .stApp {
+        background: radial-gradient(circle at 0% 0%, #1B366433, transparent), 
+                    radial-gradient(circle at 100% 100%, #00A9E011, transparent),
+                    #0b111e;
+    }
+    
     .hero-title {
-        font-size: 2.2rem; font-weight: 700;
-        background: linear-gradient(135deg, #FFD700, #FFA500);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-size: 3.2rem;
+        font-weight: 800;
+        background: linear-gradient(90deg, #ffffff, var(--houer-teal));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0rem;
+        letter-spacing: -1px;
     }
-    .hero-sub { color: #9ca3af; font-size: 0.95rem; margin-bottom: 1rem; }
-
+    .hero-sub {
+        font-size: 1.1rem;
+        color: #94a3b8;
+        margin-bottom: 2rem;
+        font-weight: 400;
+    }
+    
     .forn-card {
-        border-radius: 14px; padding: 1.2rem 1rem;
-        text-align: center; margin-bottom: 0.5rem;
-        border-top: 4px solid var(--cor);
-        background: linear-gradient(135deg, #1a2035, #1e2540);
-        border: 1px solid #2d4060;
+        background: rgba(18, 25, 43, 0.6);
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--card-border);
+        border-top: 4px solid var(--houer-teal);
+        border-radius: 20px;
+        padding: 1.8rem;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .forn-name  { font-size: 0.75rem; color: #9ca3af; text-transform: uppercase; letter-spacing:.06em; }
-    .forn-val   { font-size: 1.9rem; font-weight: 700; }
-    .forn-unit  { font-size: 0.75rem; color: #9ca3af; }
-    .section-title { font-size: 1.1rem; font-weight: 600; color: #d1d5db; margin: 1rem 0 0.5rem; }
+    .forn-card:hover {
+        transform: translateY(-8px);
+        border-color: var(--houer-teal);
+        background: rgba(27, 54, 100, 0.2);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+    .forn-name {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #f8fafc;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        margin-bottom: 1.2rem;
+    }
+    
+    .metric-label {
+        font-size: 0.85rem;
+        color: #94a3b8;
+        margin-top: 1rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .metric-value {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #ffffff; /* Valor sempre branco para destaque */
+    }
+    .metric-unit {
+        font-size: 0.9rem;
+        font-weight: 400;
+        color: #64748b;
+    }
+    
+    .section-title { 
+        font-size: 1.5rem; 
+        font-weight: 700; 
+        color: #f8fafc; 
+        margin: 3rem 0 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .section-title::before {
+        content: "";
+        display: block;
+        width: 6px;
+        height: 28px;
+        background: var(--houer-teal);
+        border-radius: 3px;
+    }
 
     div[data-testid="stSidebar"] {
-        background: linear-gradient(180deg,#0d1420,#111827);
+        background: linear-gradient(180deg, var(--houer-navy), #0b111e);
         border-right: 1px solid #1f2937;
     }
 </style>
@@ -52,7 +125,7 @@ PASTA = os.path.dirname(os.path.abspath(__file__))
 FEATURES_PATH = os.path.join(PASTA, 'features.json')
 
 FORNECEDORES = ['LEDSTAR', 'SX LIGHTING', 'TECNOWATT']
-CORES = {'LEDSTAR': '#3B82F6', 'SX LIGHTING': '#22C55E', 'TECNOWATT': '#F59E0B'}
+CORES = {'LEDSTAR': '#00A9E0', 'SX LIGHTING': '#1B3664', 'TECNOWATT': '#606060'}
 
 TARGETS_MAP = {
     'lmed': 'Luminância Média',
@@ -95,15 +168,16 @@ NBR5101 = {
 
 # ── Carrega modelos ───────────────────────────────────────────────────────────
 @st.cache_resource
-def carregar_modelos():
+def carregar_modelos(suffix=""):
+    meta_path = os.path.join(PASTA, f'features{suffix}.json')
     meta = {}
-    if os.path.exists(FEATURES_PATH):
-        with open(FEATURES_PATH, encoding='utf-8') as f:
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding='utf-8') as f:
             meta = json.load(f)
 
     modelos = {}
     for key in ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']:
-        path = os.path.join(PASTA, f'modelo_{key}.pkl')
+        path = os.path.join(PASTA, f'modelo_{key}{suffix}.pkl')
         if os.path.exists(path):
             modelos[key] = joblib.load(path)
     return modelos, meta
@@ -158,19 +232,22 @@ def buscar_custo(banco: pd.DataFrame, fornecedor: str, potencia_w: float):
     lum = row.get('Luminaria', '') if 'Luminaria' in sub.columns else ''
     return lum, row['Potencia_W'], row['Valor_R$']
 
-modelos, meta = carregar_modelos()
+# ── Carrega banco de dados de luminarias ────────────────────────────────────
 banco_luminarias = carregar_banco_luminarias()
-num_ok = meta.get('features_numericas', [])
-cat_ok = meta.get('features_categoricas', [])
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.markdown('<p class="hero-title">💡 Previsão de Iluminação Pública</p>', unsafe_allow_html=True)
-st.markdown('<p class="hero-sub">Avalie métricas específicas conforme a classificação NBR 5101.</p>', unsafe_allow_html=True)
-st.divider()
+col_l, col_r = st.columns([1, 3])
+with col_l:
+    logo_path = os.path.join(PASTA, 'images.png')
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=180)
+    else:
+        st.markdown('<div style="background:white; border-radius:12px; padding:10px; display:flex; justify-content:center; align-items:center; width:80px; height:80px;"><span style="color:#1B3664; font-size:24px; font-weight:900;">H<span style="color:#00A9E0;">O</span></span></div>', unsafe_allow_html=True)
 
-if not modelos:
-    st.error('Modelos não encontrados! Execute primeiro o script **02_treinar_modelo.py**.')
-    st.stop()
+with col_r:
+    st.markdown('<p class="hero-title" style="margin-top:10px;">Houer</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-sub" style="margin-top:-15px; font-weight:600; color:var(--houer-teal);">impactando gerações</p>', unsafe_allow_html=True)
+st.divider()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -200,6 +277,24 @@ with st.sidebar:
         req_html += f"<div style='font-size:0.8rem;color:#9ca3af;'>{label}: <b style='color:#FFD700;'>≥ {v} {unit}</b></div>"
     st.markdown(req_html, unsafe_allow_html=True)
     
+    st.divider()
+    st.markdown('## 🧹 Inteligência de Dados')
+    modo_dados = st.radio(
+        'Base de Treinamento:',
+        ['Padrão (Com outliers)', 'Otimizada (Sem outliers)'],
+        index=1,
+        help="A opção Otimizada remove valores fisicamente impossíveis das planilhas originais para melhorar a precisão."
+    )
+    sufixo_modelo = "_limpo" if modo_dados == 'Otimizada (Sem outliers)' else ""
+    
+    modelos, meta = carregar_modelos(sufixo_modelo)
+    num_ok = meta.get('features_numericas', [])
+    cat_ok = meta.get('features_categoricas', [])
+
+    if not modelos:
+        st.error(f'Modelos ({modo_dados}) não encontrados!')
+        st.stop()
+
     st.divider()
     st.markdown('## ⚙️ Parâmetros (Individual)')
     
@@ -279,27 +374,23 @@ with tab_individual:
     for i, forn in enumerate(FORNECEDORES):
         cor = CORES[forn]
         with cols[i]:
-            html_content = f"""<div class="forn-card" style="border-top-color:{cor};">
-    <div class="forn-name">{forn}</div>
-    <div style="margin-bottom:10px;"></div>
-"""
+            html_content = f'<div class="forn-card" style="border-top-color:{cor};"><div class="forn-name">{forn}</div>'
             for m in metricas_ativas:
                 val = resultados[m].get(forn)
                 val_str = f"{val:,.2f}" if val is not None else "—"
                 unit = UNITS_MAP[m]
                 label = TARGETS_MAP[m]
-                req_min = info_nbr.get(m)  # valor mínimo NBR 5101
-                # Badge de atendimento
+                req_min = info_nbr.get(m)
+                badge_html = ""
                 if val is not None and req_min is not None and m != 'w':
                     atende = val >= req_min
-                    badge_color = '#22c55e' if atende else '#ef4444'
-                    badge_txt   = '✔ Atende' if atende else '✘ Não Atende'
-                    badge_html  = f'<span style="font-size:.65rem;padding:2px 6px;border-radius:99px;background:{badge_color};color:#fff;margin-left:6px;">{badge_txt}</span>'
-                else:
-                    badge_html = ''
-                html_content += f"""    <div style="font-size:0.85rem;color:#9ca3af;margin-top:8px;">{label}{badge_html}</div>
-    <div style="font-size:1.6rem;font-weight:700;color:{cor};">{val_str} <span style="font-size:0.8rem;color:#6b7280;">{unit}</span></div>
-"""
+                    b_color = '#22c55e' if atende else '#ef4444'
+                    b_txt   = '✔ Atende' if atende else '✘ Não Atende'
+                    badge_html = f'<span style="font-size:.65rem;padding:2px 6px;border-radius:99px;background:{b_color};color:#fff;margin-left:6px;">{b_txt}</span>'
+                
+                html_content += f'<div class="metric-label"><span>{label}</span>{badge_html}</div>'
+                html_content += f'<div class="metric-value">{val_str} <span class="metric-unit">{unit}</span></div>'
+            
             html_content += "</div>"
             st.markdown(html_content, unsafe_allow_html=True)
 
@@ -314,19 +405,16 @@ with tab_individual:
             with custo_cols[i]:
                 if custo is not None:
                     delta_str = f"+{pot_real - pot_prev:.0f}W" if pot_real > pot_prev else f"{pot_real - pot_prev:.0f}W"
-                    st.markdown(f"""<div style="background:linear-gradient(135deg,#12192b,#161f30);border-radius:14px;
-padding:1.1rem 1rem;text-align:center;border:1px solid #2d4060;border-top:4px solid {cor};margin-bottom:.5rem;">
-<div style="font-size:.75rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">{forn}</div>
-<div style="font-size:.75rem;color:#6b7280;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="{lum_nome}">{lum_nome}</div>
-<div style="font-size:1rem;color:#9ca3af;">{pot_real:.0f}W <span style="font-size:.7rem;color:#6b7280;">({delta_str} da previsão)</span></div>
-<div style="font-size:1.9rem;font-weight:700;color:{cor};">R$ {custo:,.2f}</div>
-</div>""", unsafe_allow_html=True)
+                    c_html = f'<div style="background:rgba(27,54,100,0.4); backdrop-filter:blur(10px); border-radius:20px; padding:1.5rem; text-align:center; border:1px solid #2d4060; border-top:4px solid {cor}; height:100%;">'
+                    c_html += f'<div style="font-size:.75rem; color:#94a3b8; text-transform:uppercase; letter-spacing:.1em; margin-bottom:1rem;">{forn}</div>'
+                    c_html += f'<div style="font-size:.85rem; color:#f8fafc; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{lum_nome}">{lum_nome}</div>'
+                    c_html += f'<div style="font-size:.9rem; color:#94a3b8; margin-bottom:1rem;">{pot_real:.0f}W <span style="font-size:.7rem; color:#64748b;">({delta_str})</span></div>'
+                    c_html += f'<div style="font-size:2.2rem; font-weight:800; color:white;">R$ {custo:,.2f}</div></div>'
+                    st.markdown(c_html, unsafe_allow_html=True)
                 else:
-                    st.markdown(f"""<div style="background:#111827;border-radius:14px;padding:1.1rem;
-text-align:center;border:1px solid #1f2937;border-top:4px solid {cor};">
-<div style="font-size:.75rem;color:#9ca3af;text-transform:uppercase;">{forn}</div>
-<div style="font-size:1.3rem;color:#6b7280;">Sem dados no banco</div>
-</div>""", unsafe_allow_html=True)
+                    e_html = f'<div style="background:rgba(18,25,43,0.6); border-radius:20px; padding:1.5rem; text-align:center; border:1px solid #1f2937; border-top:4px solid {cor}; height:100%;">'
+                    e_html += f'<div style="font-size:.75rem; color:#94a3b8; text-transform:uppercase;">{forn}</div><div style="font-size:1.1rem; color:#64748b; margin-top:1rem;">Sem dados no banco</div></div>'
+                    st.markdown(e_html, unsafe_allow_html=True)
 
     # Gráficos
     st.markdown('<p class="section-title">📈 Comparativo Gráfico</p>', unsafe_allow_html=True)
@@ -458,11 +546,16 @@ with tab_lote:
 # ── Info do modelo ─────────────────────────────────────────────────────────────
 with st.expander('ℹ️ Métricas dos Modelos Treinados'):
     cols = st.columns(3)
-    for i, m in enumerate(['lmed', 'uo', 'ul', 'emed', 'emin', 'w']):
+    targets_disp = ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']
+    for i, m in enumerate(targets_disp):
         with cols[i % 3]:
             st.markdown(f"**{TARGETS_MAP[m]}**")
             info = meta.get(f'modelo_{m}')
             if info:
-                st.metric('R² (teste)', f"{info.get('r2_teste','—'):.4f}")
+                r2_val = info.get('r2')
+                mae_val = info.get('mae')
+                st.metric('R² (teste)', f"{r2_val:.4f}" if r2_val is not None else "—")
+                st.caption(f"Erro Médio (MAE): {mae_val:.2f}" if mae_val is not None else "")
+                st.caption(f"Algoritmo: {info.get('type','—')}")
             else:
-                st.markdown('*Sem modelo*')
+                st.info("Modelo não treinado para este alvo.")

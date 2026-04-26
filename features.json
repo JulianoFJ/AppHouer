@@ -9,8 +9,7 @@
     "altura da luminaria",
     "projecao do braço",
     "distancia entre postes",
-    "distancia Poste a via",
-    "Altura de Instalação"
+    "distancia Poste a via"
   ],
   "features_categoricas": [
     "Classificação viária",
@@ -20,189 +19,33 @@
     "Fornecedor"
   ],
   "modelo_lmed": {
-    "modelo": "RandomForest",
-    "target": "Luminância Média",
-    "features_numericas": [
-      "Faixas de Rodagem",
-      "Largura Via 1",
-      "Largura Via 2",
-      "Largura Passeio 1",
-      "largura Passeio 2",
-      "largura Canteiro Central",
-      "altura da luminaria",
-      "projecao do braço",
-      "distancia entre postes",
-      "distancia Poste a via",
-      "Altura de Instalação"
-    ],
-    "features_categoricas": [
-      "Classificação viária",
-      "Tipo de estrutura",
-      "posteacao",
-      "Braço Novo",
-      "Fornecedor"
-    ],
-    "r2_cv": 0.6313,
-    "mae_cv": 5.41,
-    "r2_teste": 0.2788,
-    "mae_teste": 4.15,
-    "rmse_teste": 5.12,
-    "n_amostras_treino": 22,
-    "n_amostras_teste": 6
+    "r2": 0.2788,
+    "mae": 4.15,
+    "type": "RandomForest"
   },
   "modelo_uo": {
-    "modelo": "Ridge",
-    "target": "Fator de Uniformidade",
-    "features_numericas": [
-      "Faixas de Rodagem",
-      "Largura Via 1",
-      "Largura Via 2",
-      "Largura Passeio 1",
-      "largura Passeio 2",
-      "largura Canteiro Central",
-      "altura da luminaria",
-      "projecao do braço",
-      "distancia entre postes",
-      "distancia Poste a via",
-      "Altura de Instalação"
-    ],
-    "features_categoricas": [
-      "Classificação viária",
-      "Tipo de estrutura",
-      "posteacao",
-      "Braço Novo",
-      "Fornecedor"
-    ],
-    "r2_cv": -2.9878,
-    "mae_cv": 0.32,
-    "r2_teste": -2.1171,
-    "mae_teste": 0.21,
-    "rmse_teste": 0.28,
-    "n_amostras_treino": 770,
-    "n_amostras_teste": 193
+    "r2": -2.1171,
+    "mae": 0.21,
+    "type": "Ridge"
   },
   "modelo_ul": {
-    "modelo": "HistGradientBoosting",
-    "target": "Uniformidade Longitudinal",
-    "features_numericas": [
-      "Faixas de Rodagem",
-      "Largura Via 1",
-      "Largura Via 2",
-      "Largura Passeio 1",
-      "largura Passeio 2",
-      "largura Canteiro Central",
-      "altura da luminaria",
-      "projecao do braço",
-      "distancia entre postes",
-      "distancia Poste a via",
-      "Altura de Instalação"
-    ],
-    "features_categoricas": [
-      "Classificação viária",
-      "Tipo de estrutura",
-      "posteacao",
-      "Braço Novo",
-      "Fornecedor"
-    ],
-    "r2_cv": -19.9425,
-    "mae_cv": 1.34,
-    "r2_teste": -0.0511,
-    "mae_teste": 1.48,
-    "rmse_teste": 2.56,
-    "n_amostras_treino": 23,
-    "n_amostras_teste": 6
+    "r2": -0.0511,
+    "mae": 1.48,
+    "type": "HistGradientBoosting"
   },
   "modelo_emed": {
-    "modelo": "RandomForest",
-    "target": "Iluminância Média",
-    "features_numericas": [
-      "Faixas de Rodagem",
-      "Largura Via 1",
-      "Largura Via 2",
-      "Largura Passeio 1",
-      "largura Passeio 2",
-      "largura Canteiro Central",
-      "altura da luminaria",
-      "projecao do braço",
-      "distancia entre postes",
-      "distancia Poste a via",
-      "Altura de Instalação"
-    ],
-    "features_categoricas": [
-      "Classificação viária",
-      "Tipo de estrutura",
-      "posteacao",
-      "Braço Novo",
-      "Fornecedor"
-    ],
-    "r2_cv": 0.864,
-    "mae_cv": 1.48,
-    "r2_teste": 0.8672,
-    "mae_teste": 1.38,
-    "rmse_teste": 2.44,
-    "n_amostras_treino": 1496,
-    "n_amostras_teste": 375
+    "r2": 0.8672,
+    "mae": 1.38,
+    "type": "RandomForest"
   },
   "modelo_emin": {
-    "modelo": "HistGradientBoosting",
-    "target": "Iluminância mínima horizontal E (lux)",
-    "features_numericas": [
-      "Faixas de Rodagem",
-      "Largura Via 1",
-      "Largura Via 2",
-      "Largura Passeio 1",
-      "largura Passeio 2",
-      "largura Canteiro Central",
-      "altura da luminaria",
-      "projecao do braço",
-      "distancia entre postes",
-      "distancia Poste a via",
-      "Altura de Instalação"
-    ],
-    "features_categoricas": [
-      "Classificação viária",
-      "Tipo de estrutura",
-      "posteacao",
-      "Braço Novo",
-      "Fornecedor"
-    ],
-    "r2_cv": 0.6943,
-    "mae_cv": 1.5,
-    "r2_teste": 0.7609,
-    "mae_teste": 1.51,
-    "rmse_teste": 3.32,
-    "n_amostras_treino": 1298,
-    "n_amostras_teste": 325
+    "r2": 0.7609,
+    "mae": 1.51,
+    "type": "HistGradientBoosting"
   },
   "modelo_w": {
-    "modelo": "HistGradientBoosting",
-    "target": "Potencia simulada - IP Principal (W)",
-    "features_numericas": [
-      "Faixas de Rodagem",
-      "Largura Via 1",
-      "Largura Via 2",
-      "Largura Passeio 1",
-      "largura Passeio 2",
-      "largura Canteiro Central",
-      "altura da luminaria",
-      "projecao do braço",
-      "distancia entre postes",
-      "distancia Poste a via",
-      "Altura de Instalação"
-    ],
-    "features_categoricas": [
-      "Classificação viária",
-      "Tipo de estrutura",
-      "posteacao",
-      "Braço Novo",
-      "Fornecedor"
-    ],
-    "r2_cv": 0.8136,
-    "mae_cv": 6.13,
-    "r2_teste": 0.8149,
-    "mae_teste": 5.19,
-    "rmse_teste": 8.86,
-    "n_amostras_treino": 1516,
-    "n_amostras_teste": 380
+    "r2": 0.8149,
+    "mae": 5.19,
+    "type": "HistGradientBoosting"
   }
 }

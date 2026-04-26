@@ -30,7 +30,7 @@ FEATURES_NUMERICAS = [
     'projecao do braço',
     'distancia entre postes',
     'distancia Poste a via',
-    'Altura de Instalação',
+    # 'Altura de Instalação'  <- REMOVIDA: 100% vazia no dataset
 ]
 
 FEATURES_CATEGORICAS = [
@@ -126,11 +126,40 @@ for col in FEATURES_NUMERICAS:
     if col in df_total.columns:
         df_total[col] = pd.to_numeric(df_total[col], errors='coerce')
 
-# ── Salva ──────────────────────────────────────────────────────────────────────
-output = os.path.join(PASTA, 'dataset.csv')
-df_total.to_csv(output, index=False, encoding='utf-8-sig')
+# ── Salva dataset bruto (com outliers) ─────────────────────────────────────────────
+output_bruto = os.path.join(PASTA, 'dataset.csv')
+df_total.to_csv(output_bruto, index=False, encoding='utf-8-sig')
+print(f'\n[OK] Dataset BRUTO salvo em: {output_bruto} ({len(df_total)} linhas)')
 
-print(f'\n[OK] Dataset salvo em: {output}')
+# ── Aplica filtro de outliers e salva dataset limpo ───────────────────────────────
+df_limpo = df_total.copy()
+
+def filtrar(df, col_pattern, vmin=None, vmax=None):
+    """Remove linhas onde col < vmin ou col > vmax (apenas se col existir)."""
+    c = next((x for x in df.columns if col_pattern.lower() in x.lower()), None)
+    if c is None:
+        return df
+    serie = pd.to_numeric(df[c], errors='coerce')
+    mask = pd.Series([True] * len(df), index=df.index)
+    if vmin is not None:
+        mask &= (serie >= vmin) | serie.isna()
+    if vmax is not None:
+        mask &= (serie <= vmax) | serie.isna()
+    removidas = (~mask).sum()
+    if removidas > 0:
+        print(f'  [FILTRO] {c}: {removidas} linhas removidas (fora de [{vmin}, {vmax}])')
+    return df[mask]
+
+antes = len(df_limpo)
+df_limpo = filtrar(df_limpo, 'Largura Passeio 1',     vmin=0,   vmax=50)
+df_limpo = filtrar(df_limpo, 'largura Passeio 2',     vmin=0,   vmax=50)
+df_limpo = filtrar(df_limpo, 'altura da luminaria',   vmin=3,   vmax=25)
+df_limpo = filtrar(df_limpo, 'distancia entre poste', vmin=5,   vmax=85)
+print(f'  Outliers removidos no total: {antes - len(df_limpo)} linhas')
+
+output_limpo = os.path.join(PASTA, 'dataset_limpo.csv')
+df_limpo.to_csv(output_limpo, index=False, encoding='utf-8-sig')
+print(f'[OK] Dataset LIMPO salvo em: {output_limpo} ({len(df_limpo)} linhas)')
 print(f'\nResumo Estatístico dos Alvos:')
 for tgt in TARGETS:
     if tgt in df_total.columns:
