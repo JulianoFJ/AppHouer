@@ -1,13 +1,3 @@
-"""
-03_app_previsao.py
--------------------
-App Streamlit interativo — preve Fluxo Luminoso (lm) e Potencia (W)
-para Ledstar, SX Lighting e Tecnowatt, tanto individualmente quanto em lote via planilha.
-
-Execucao:
-    streamlit run 03_app_previsao.py
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -44,7 +34,6 @@ st.markdown("""
         border-top: 4px solid var(--cor);
         background: linear-gradient(135deg, #1a2035, #1e2540);
         border: 1px solid #2d4060;
-        border-top: 4px solid var(--cor);
     }
     .forn-name  { font-size: 0.75rem; color: #9ca3af; text-transform: uppercase; letter-spacing:.06em; }
     .forn-val   { font-size: 1.9rem; font-weight: 700; }
@@ -59,61 +48,167 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Caminhos ──────────────────────────────────────────────────────────────────
-PASTA        = os.path.dirname(os.path.abspath(__file__))
-MODELO_LM    = os.path.join(PASTA, 'modelo_lm.pkl')
-MODELO_W     = os.path.join(PASTA, 'modelo_w.pkl')
-FEATURES_PATH= os.path.join(PASTA, 'features.json')
-
-# Compatibilidade com modelo antigo (modelo_potencia.pkl)
-MODELO_LEGACY= os.path.join(PASTA, 'modelo_potencia.pkl')
+PASTA = os.path.dirname(os.path.abspath(__file__))
+FEATURES_PATH = os.path.join(PASTA, 'features.json')
 
 FORNECEDORES = ['LEDSTAR', 'SX LIGHTING', 'TECNOWATT']
 CORES = {'LEDSTAR': '#3B82F6', 'SX LIGHTING': '#22C55E', 'TECNOWATT': '#F59E0B'}
 
+TARGETS_MAP = {
+    'lmed': 'Luminância Média',
+    'uo': 'Fator de Uniformidade',
+    'ul': 'Uniformidade Longitudinal',
+    'emed': 'Iluminância Média',
+    'emin': 'Iluminância mínima horizontal E (lux)',
+    'w': 'Potência (W)'
+}
+UNITS_MAP = {
+    'lmed': 'cd/m²', 'uo': '', 'ul': '', 'emed': 'lux', 'emin': 'lux', 'w': 'W'
+}
+
+# ── Tabela NBR 5101 – Requisitos Mínimos por Subclasse ─────────────────────────
+# Fonte: ABNT NBR 5101:2024
+# M = Luminância (cd/m²) | C/P = Iluminância (lux)
+NBR5101 = {
+    # Vias Motorizadas (Lmed em cd/m², Uo, Ul)
+    'M1': {'metricas': ['lmed','uo','ul','w'], 'lmed': 2.0, 'uo': 0.40, 'ul': 0.70},
+    'M2': {'metricas': ['lmed','uo','ul','w'], 'lmed': 1.5, 'uo': 0.40, 'ul': 0.70},
+    'M3': {'metricas': ['lmed','uo','ul','w'], 'lmed': 1.0, 'uo': 0.40, 'ul': 0.60},
+    'M4': {'metricas': ['lmed','uo','ul','w'], 'lmed': 0.75,'uo': 0.40, 'ul': 0.60},
+    'M5': {'metricas': ['lmed','uo','ul','w'], 'lmed': 0.50,'uo': 0.35, 'ul': 0.40},
+    'M6': {'metricas': ['lmed','uo','ul','w'], 'lmed': 0.30,'uo': 0.35, 'ul': 0.40},
+    # Áreas de Conflito (Emed em lux, Uo)
+    'C0': {'metricas': ['emed','uo','w'], 'emed': 50.0, 'uo': 0.40},
+    'C1': {'metricas': ['emed','uo','w'], 'emed': 30.0, 'uo': 0.40},
+    'C2': {'metricas': ['emed','uo','w'], 'emed': 20.0, 'uo': 0.40},
+    'C3': {'metricas': ['emed','uo','w'], 'emed': 15.0, 'uo': 0.35},
+    'C4': {'metricas': ['emed','uo','w'], 'emed': 10.0, 'uo': 0.35},
+    'C5': {'metricas': ['emed','uo','w'], 'emed':  5.0, 'uo': 0.35},
+    # Vias Pedonais/Ciclovias (Emed e Emin em lux)
+    'P1': {'metricas': ['emed','emin','w'], 'emed': 20.0, 'emin': 7.5},
+    'P2': {'metricas': ['emed','emin','w'], 'emed': 15.0, 'emin': 5.0},
+    'P3': {'metricas': ['emed','emin','w'], 'emed': 10.0, 'emin': 3.0},
+    'P4': {'metricas': ['emed','emin','w'], 'emed':  7.5, 'emin': 1.5},
+    'P5': {'metricas': ['emed','emin','w'], 'emed':  5.0, 'emin': 1.0},
+    'P6': {'metricas': ['emed','emin','w'], 'emed':  3.0, 'emin': 0.6},
+}
+
 # ── Carrega modelos ───────────────────────────────────────────────────────────
 @st.cache_resource
-def carregar_modelos_v2():
+def carregar_modelos():
     meta = {}
     if os.path.exists(FEATURES_PATH):
         with open(FEATURES_PATH, encoding='utf-8') as f:
             meta = json.load(f)
 
-    # Modelo lm
-    modelo_lm = None
-    if os.path.exists(MODELO_LM):
-        modelo_lm = joblib.load(MODELO_LM)
-    elif os.path.exists(MODELO_LEGACY):
-        modelo_lm = joblib.load(MODELO_LEGACY)
+    modelos = {}
+    for key in ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']:
+        path = os.path.join(PASTA, f'modelo_{key}.pkl')
+        if os.path.exists(path):
+            modelos[key] = joblib.load(path)
+    return modelos, meta
 
-    # Modelo W
-    modelo_w = None
-    if os.path.exists(MODELO_W):
-        modelo_w = joblib.load(MODELO_W)
+# ── Carrega banco de dados de luminarias ────────────────────────────────────
+@st.cache_data
+def carregar_banco_luminarias():
+    """Lê a aba 'Banco de dados' das planilhas e retorna DataFrame com Fornecedor, Potência e Valor."""
+    dfs = []
+    for arq in os.listdir(PASTA):
+        if not arq.endswith('.xlsx'):
+            continue
+        try:
+            xl = pd.ExcelFile(os.path.join(PASTA, arq), engine='openpyxl')
+            aba = next((n for n in xl.sheet_names if 'banco' in n.lower()), None)
+            if not aba:
+                continue
+            df_raw = pd.read_excel(os.path.join(PASTA, arq), sheet_name=aba, header=1)
+            df_raw = df_raw.dropna(how='all').dropna(axis=1, how='all')
+            # A primeira linha contém os nomes reais
+            df_raw.columns = df_raw.iloc[0]
+            df_raw = df_raw[1:].reset_index(drop=True)
+            # Padroniza nomes das colunas relevantes
+            col_forn = next((c for c in df_raw.columns if 'forn' in str(c).lower()), None)
+            col_pot  = next((c for c in df_raw.columns if 'pot' in str(c).lower() and '[w]' in str(c).lower()), None)
+            col_lum  = next((c for c in df_raw.columns if 'lumin' in str(c).lower() and 'cod' not in str(c).lower() and 'consider' not in str(c).lower()), None)
+            col_val  = next((c for c in df_raw.columns if str(c).strip().lower() == 'valor'), None)
+            if not all([col_forn, col_pot, col_val]):
+                continue
+            df_sel = df_raw[[col_forn, col_pot, col_val]].copy()
+            if col_lum:
+                df_sel['Luminaria'] = df_raw[col_lum]
+            df_sel.columns = ['Fornecedor', 'Potencia_W', 'Valor_R$'] + (['Luminaria'] if col_lum else [])
+            df_sel = df_sel[df_sel['Fornecedor'].isin(['LEDSTAR', 'SX LIGHTING', 'TECNOWATT'])]
+            df_sel['Potencia_W'] = pd.to_numeric(df_sel['Potencia_W'], errors='coerce')
+            df_sel['Valor_R$']   = pd.to_numeric(df_sel['Valor_R$'],   errors='coerce')
+            df_sel = df_sel.dropna(subset=['Potencia_W', 'Valor_R$'])
+            dfs.append(df_sel)
+        except Exception:
+            continue
+    if dfs:
+        return pd.concat(dfs).drop_duplicates().reset_index(drop=True)
+    return pd.DataFrame(columns=['Fornecedor', 'Potencia_W', 'Valor_R$'])
 
-    return modelo_lm, modelo_w, meta
+def buscar_custo(banco: pd.DataFrame, fornecedor: str, potencia_w: float):
+    """Retorna (luminaria, potencia_real, valor) da luminaria mais próxima em potência."""
+    sub = banco[banco['Fornecedor'] == fornecedor].copy()
+    if sub.empty or potencia_w is None:
+        return None, None, None
+    idx_min = (sub['Potencia_W'] - potencia_w).abs().idxmin()
+    row = sub.loc[idx_min]
+    lum = row.get('Luminaria', '') if 'Luminaria' in sub.columns else ''
+    return lum, row['Potencia_W'], row['Valor_R$']
 
-modelo_lm, modelo_w, meta = carregar_modelos_v2()
+modelos, meta = carregar_modelos()
+banco_luminarias = carregar_banco_luminarias()
 num_ok = meta.get('features_numericas', [])
 cat_ok = meta.get('features_categoricas', [])
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown('<p class="hero-title">💡 Previsão de Iluminação Pública</p>', unsafe_allow_html=True)
-st.markdown('<p class="hero-sub">Compare Fluxo Luminoso (lm) e Potência (W) por fornecedor a partir das características físicas da instalação.</p>', unsafe_allow_html=True)
+st.markdown('<p class="hero-sub">Avalie métricas específicas conforme a classificação NBR 5101.</p>', unsafe_allow_html=True)
 st.divider()
 
-if modelo_lm is None:
-    st.error('Modelo não encontrado! Execute primeiro o script **02_treinar_modelo.py**.')
+if not modelos:
+    st.error('Modelos não encontrados! Execute primeiro o script **02_treinar_modelo.py**.')
     st.stop()
 
-# ── Sidebar (Parâmetros da Simulação Individual) ──────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('## ⚙️ Parâmetros (Apenas para Individual)')
+    st.markdown('## 🏷️ Classificação da Via')
+    st.markdown('**Selecione a subclasse NBR 5101:**')
+    
+    opcoes_via = (
+        ['M1','M2','M3','M4','M5','M6'] +
+        ['C0','C1','C2','C3','C4','C5'] +
+        ['P1','P2','P3','P4','P5','P6']
+    )
+    subclasse = st.selectbox(
+        'Subclasse da Via',
+        opcoes_via,
+        index=3,  # default C3
+        format_func=lambda x: f"{x} — {'Via Motorizada' if x.startswith('M') else ('Área de Conflito' if x.startswith('C') else 'Via Pedonal/Ciclovia')}"
+    )
+    info_nbr = NBR5101.get(subclasse, {})
+    
+    # Mostra requisitos mínimos da subclasse selecionada
+    st.markdown('**Requisitos NBR 5101:**')
+    req_html = ""
+    for k, v in info_nbr.items():
+        if k == 'metricas': continue
+        label = TARGETS_MAP.get(k, k)
+        unit  = UNITS_MAP.get(k, '')
+        req_html += f"<div style='font-size:0.8rem;color:#9ca3af;'>{label}: <b style='color:#FFD700;'>≥ {v} {unit}</b></div>"
+    st.markdown(req_html, unsafe_allow_html=True)
+    
     st.divider()
-
+    st.markdown('## ⚙️ Parâmetros (Individual)')
+    
     st.markdown('### 🛣️ Geometria da Via')
     faixas         = st.slider('Faixas de Rodagem',            1, 6,    2, step=1)
     largura_via1   = st.slider('Largura Via 1 (m)',            4.0, 20.0, 7.0, step=0.5)
     largura_via2   = st.slider('Largura Via 2 (m)',            0.0, 20.0, 0.0, step=0.5)
+    largura_passeio1 = st.slider('Largura Passeio 1 (m)',      0.0, 10.0, 2.0, step=0.5)
+    largura_passeio2 = st.slider('Largura Passeio 2 (m)',      0.0, 10.0, 2.0, step=0.5)
     canteiro       = st.slider('Largura Canteiro Central (m)', 0.0, 10.0, 0.0, step=0.5)
 
     st.markdown('### 🏗️ Estrutura')
@@ -124,14 +219,12 @@ with st.sidebar:
     altura_inst    = st.slider('Altura de Instalação (m)',     4.0, 16.0, 10.0, step=0.5)
 
     st.markdown('### 🔩 Configurações')
+    tipo_estrutura = st.selectbox('Tipo de Estrutura', ['Braço', 'Suporte'])
+    posteacao      = st.selectbox('Posteação', ['Unilateral', 'Canteiro central', 'Bilateral alternada', 'Bilateral frontal'])
+    braco_novo     = st.selectbox('Braço Novo', ['Longo II', 'Longo I', 'Médio I', 'Médio II', 'Curto II', 'Curto I'])
 
-    tipo_estrutura_opts = ['Braço', 'Suporte']
-    posteacao_opts      = ['Unilateral', 'Canteiro central', 'Bilateral alternada', 'Bilateral frontal']
-    braco_opts          = ['Longo II', 'Longo I', 'Médio I', 'Médio II', 'Curto II', 'Curto I']
-
-    tipo_estrutura = st.selectbox('Tipo de Estrutura', tipo_estrutura_opts)
-    posteacao      = st.selectbox('Posteação',         posteacao_opts)
-    braco_novo     = st.selectbox('Braço Novo',        braco_opts)
+# Métricas ativas baseadas na subclasse NBR 5101
+metricas_ativas = NBR5101.get(subclasse, {}).get('metricas', ['emed', 'w'])
 
 # ── Tabs Principais ───────────────────────────────────────────────────────────
 tab_individual, tab_lote = st.tabs(['🎯 Simulação Individual', '📂 Simulação em Lote'])
@@ -140,13 +233,13 @@ tab_individual, tab_lote = st.tabs(['🎯 Simulação Individual', '📂 Simula�
 # TAB 1: SIMULAÇÃO INDIVIDUAL
 # ==============================================================================
 with tab_individual:
-    
-    # ── Função de previsão
     def montar_entrada(fornecedor):
         dados = {
             'Faixas de Rodagem':        faixas,
             'Largura Via 1':            largura_via1,
             'Largura Via 2':            largura_via2,
+            'Largura Passeio 1':        largura_passeio1,
+            'largura Passeio 2':        largura_passeio2,
             'largura Canteiro Central': canteiro,
             'altura da luminaria':      altura_lum,
             'projecao do braço':        projecao_braco,
@@ -154,7 +247,8 @@ with tab_individual:
             'distancia entre postes':   dist_postes,
             'distancia Poste a via':    dist_poste_via,
             'Altura de Instalação':     altura_inst,
-            'Altura de Instalao':      altura_inst,
+            'Altura de Instalao':       altura_inst,
+            'Classificação viária':    subclasse,   # subclasse NBR 5101
             'Tipo de estrutura':        tipo_estrutura,
             'posteacao':                posteacao,
             'Braço Novo':               braco_novo,
@@ -164,67 +258,80 @@ with tab_individual:
         colunas = num_ok + cat_ok
         return pd.DataFrame([{k: dados.get(k, np.nan) for k in colunas}])
 
-    previsoes_lm = {}
-    previsoes_w  = {}
-
+    # Roda as predições
+    resultados = {m: {} for m in metricas_ativas}
     for forn in FORNECEDORES:
         X_in = montar_entrada(forn)
-        try:
-            previsoes_lm[forn] = max(modelo_lm.predict(X_in)[0], 0)
-        except Exception as e:
-            previsoes_lm[forn] = None
-        try:
-            previsoes_w[forn] = max(modelo_w.predict(X_in)[0], 0) if modelo_w else None
-        except Exception as e:
-            previsoes_w[forn] = None
+        for m in metricas_ativas:
+            if m in modelos:
+                try:
+                    val = modelos[m].predict(X_in)[0]
+                    resultados[m][forn] = max(val, 0)
+                except Exception as e:
+                    print(f"Erro ao prever {m}: {e}")
+                    resultados[m][forn] = None
+            else:
+                resultados[m][forn] = None
 
-    # ── Cards por fornecedor
+    # Exibe os Cards Dinâmicos
+    st.markdown('<p class="section-title">📊 Resultados por Fornecedor</p>', unsafe_allow_html=True)
     cols = st.columns(3)
     for i, forn in enumerate(FORNECEDORES):
-        cor   = CORES[forn]
-        val_lm = previsoes_lm.get(forn)
-        val_w  = previsoes_w.get(forn)
+        cor = CORES[forn]
         with cols[i]:
-            st.markdown(f"""
-            <div style="background:linear-gradient(135deg,#1a2035,#1e2540);border-radius:14px;
-                        padding:1.3rem 1rem;text-align:center;border-top:4px solid {cor};
-                        border:1px solid #2d4060;border-top:4px solid {cor};margin-bottom:.5rem;">
-                <div style="font-size:.75rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">{forn}</div>
-                <div style="font-size:1.8rem;font-weight:700;color:{cor};">{f'{val_lm:,.0f}' if val_lm is not None else '—'}</div>
-                <div style="font-size:.8rem;color:#9ca3af;">lúmens (lm)</div>
-                <div style="margin:.6rem 0;border-top:1px solid #2d3a50;"></div>
-                <div style="font-size:1.5rem;font-weight:700;color:#e2e8f0;">{f'{val_w:,.0f}' if val_w is not None else '—'}</div>
-                <div style="font-size:.8rem;color:#9ca3af;">potência (W)</div>
-            </div>
-            """, unsafe_allow_html=True)
+            html_content = f"""<div class="forn-card" style="border-top-color:{cor};">
+    <div class="forn-name">{forn}</div>
+    <div style="margin-bottom:10px;"></div>
+"""
+            for m in metricas_ativas:
+                val = resultados[m].get(forn)
+                val_str = f"{val:,.2f}" if val is not None else "—"
+                unit = UNITS_MAP[m]
+                label = TARGETS_MAP[m]
+                req_min = info_nbr.get(m)  # valor mínimo NBR 5101
+                # Badge de atendimento
+                if val is not None and req_min is not None and m != 'w':
+                    atende = val >= req_min
+                    badge_color = '#22c55e' if atende else '#ef4444'
+                    badge_txt   = '✔ Atende' if atende else '✘ Não Atende'
+                    badge_html  = f'<span style="font-size:.65rem;padding:2px 6px;border-radius:99px;background:{badge_color};color:#fff;margin-left:6px;">{badge_txt}</span>'
+                else:
+                    badge_html = ''
+                html_content += f"""    <div style="font-size:0.85rem;color:#9ca3af;margin-top:8px;">{label}{badge_html}</div>
+    <div style="font-size:1.6rem;font-weight:700;color:{cor};">{val_str} <span style="font-size:0.8rem;color:#6b7280;">{unit}</span></div>
+"""
+            html_content += "</div>"
+            st.markdown(html_content, unsafe_allow_html=True)
 
-    # ── Eficiência luminosa calculada (lm/W)
-    st.markdown('<p class="section-title">⚡ Eficiência Luminosa Calculada (lm/W)</p>', unsafe_allow_html=True)
-    ef_cols = st.columns(3)
-    for i, forn in enumerate(FORNECEDORES):
-        lm = previsoes_lm.get(forn)
-        w  = previsoes_w.get(forn)
-        with ef_cols[i]:
-            if lm and w and w > 0:
-                ef = lm / w
-                cor = CORES[forn]
-                st.markdown(f"""
-                <div style="background:#111827;border-radius:10px;padding:.8rem;text-align:center;border:1px solid #1f2937;">
-                    <div style="font-size:.7rem;color:#9ca3af;">{forn}</div>
-                    <div style="font-size:1.4rem;font-weight:700;color:{cor};">{ef:.1f} lm/W</div>
-                </div>""", unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div style="background:#111827;border-radius:10px;padding:.8rem;text-align:center;border:1px solid #1f2937;">
-                    <div style="font-size:.7rem;color:#9ca3af;">{forn}</div>
-                    <div style="font-size:1.4rem;color:#6b7280;">— lm/W</div>
-                </div>""", unsafe_allow_html=True)
+    # ── Cards de Custo por Fornecedor
+    if not banco_luminarias.empty and 'w' in resultados:
+        st.markdown('<p class="section-title">💰 Luminária Mais Próxima e Custo Estimado</p>', unsafe_allow_html=True)
+        custo_cols = st.columns(3)
+        for i, forn in enumerate(FORNECEDORES):
+            pot_prev = resultados['w'].get(forn)
+            lum_nome, pot_real, custo = buscar_custo(banco_luminarias, forn, pot_prev)
+            cor = CORES[forn]
+            with custo_cols[i]:
+                if custo is not None:
+                    delta_str = f"+{pot_real - pot_prev:.0f}W" if pot_real > pot_prev else f"{pot_real - pot_prev:.0f}W"
+                    st.markdown(f"""<div style="background:linear-gradient(135deg,#12192b,#161f30);border-radius:14px;
+padding:1.1rem 1rem;text-align:center;border:1px solid #2d4060;border-top:4px solid {cor};margin-bottom:.5rem;">
+<div style="font-size:.75rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;">{forn}</div>
+<div style="font-size:.75rem;color:#6b7280;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="{lum_nome}">{lum_nome}</div>
+<div style="font-size:1rem;color:#9ca3af;">{pot_real:.0f}W <span style="font-size:.7rem;color:#6b7280;">({delta_str} da previsão)</span></div>
+<div style="font-size:1.9rem;font-weight:700;color:{cor};">R$ {custo:,.2f}</div>
+</div>""", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""<div style="background:#111827;border-radius:14px;padding:1.1rem;
+text-align:center;border:1px solid #1f2937;border-top:4px solid {cor};">
+<div style="font-size:.75rem;color:#9ca3af;text-transform:uppercase;">{forn}</div>
+<div style="font-size:1.3rem;color:#6b7280;">Sem dados no banco</div>
+</div>""", unsafe_allow_html=True)
 
-    st.markdown('<br>', unsafe_allow_html=True)
-
-    # ── Gráfico comparativo
-    tab_graf_lm, tab_graf_w, tab_graf_ef = st.tabs(['📊 Fluxo Luminoso (lm)', '⚡ Potência (W)', '🔀 Eficiência (lm/W)'])
-
+    # Gráficos
+    st.markdown('<p class="section-title">📈 Comparativo Gráfico</p>', unsafe_allow_html=True)
+    tabs_graf = st.tabs([TARGETS_MAP[m] for m in metricas_ativas])
+    
     def bar_chart(valores, unidade, titulo):
         fig = go.Figure()
         for forn, val in valores.items():
@@ -232,7 +339,7 @@ with tab_individual:
                 fig.add_trace(go.Bar(
                     x=[forn], y=[val], name=forn,
                     marker_color=CORES[forn],
-                    text=[f'{val:,.0f} {unidade}'], textposition='outside',
+                    text=[f'{val:,.2f} {unidade}'], textposition='outside',
                     textfont=dict(size=13, color='white'),
                 ))
         fig.update_layout(
@@ -245,60 +352,18 @@ with tab_individual:
         )
         return fig
 
-    with tab_graf_lm:
-        st.plotly_chart(bar_chart(previsoes_lm, 'lm', 'Fluxo Luminoso (lm)'), use_container_width=True)
-
-    with tab_graf_w:
-        if modelo_w:
-            st.plotly_chart(bar_chart(previsoes_w, 'W', 'Potência (W)'), use_container_width=True)
-        else:
-            st.warning('Modelo de potência não disponível. Execute o 02_treinar_modelo.py.')
-
-    with tab_graf_ef:
-        ef_vals = {}
-        for forn in FORNECEDORES:
-            lm = previsoes_lm.get(forn)
-            w  = previsoes_w.get(forn)
-            ef_vals[forn] = (lm / w) if lm and w and w > 0 else None
-        if any(v is not None for v in ef_vals.values()):
-            st.plotly_chart(bar_chart(ef_vals, 'lm/W', 'Eficiência Luminosa (lm/W)'), use_container_width=True)
-
-    # ── Radar do perfil
-    st.markdown('### 🕸️ Perfil da Instalação')
-    categorias = ['Via 1 (m)', 'Altura Lum.', 'Projeção', 'Dist. Postes', 'Faixas']
-    vals_norm  = [largura_via1/20, altura_lum/16, projecao_braco/4, dist_postes/60, faixas/6]
-
-    fig_radar = go.Figure()
-    fig_radar.add_trace(go.Scatterpolar(
-        r=vals_norm + [vals_norm[0]],
-        theta=categorias + [categorias[0]],
-        fill='toself',
-        fillcolor='rgba(255,165,0,0.15)',
-        line=dict(color='#FFA500', width=2),
-    ))
-    fig_radar.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#d1d5db', family='Inter'),
-        polar=dict(
-            bgcolor='rgba(0,0,0,0)',
-            radialaxis=dict(visible=True, range=[0,1], gridcolor='#2d3748', color='#9ca3af'),
-            angularaxis=dict(gridcolor='#2d3748', color='#d1d5db'),
-        ),
-        showlegend=False, height=340, margin=dict(t=20, b=10),
-    )
-    st.plotly_chart(fig_radar, use_container_width=True)
+    for idx, m in enumerate(metricas_ativas):
+        with tabs_graf[idx]:
+            st.plotly_chart(bar_chart(resultados[m], UNITS_MAP[m], TARGETS_MAP[m]), use_container_width=True)
 
 # ==============================================================================
 # TAB 2: SIMULAÇÃO EM LOTE
 # ==============================================================================
 with tab_lote:
     st.markdown('### 📥 1. Baixe a Planilha Padrão')
-    st.markdown('Preencha as características geométricas de cada instalação em uma nova linha.')
+    st.markdown('Preencha as características geométricas de cada instalação.')
     
-    # Prepara o dataframe template (remove a coluna Fornecedor pois o próprio modelo vai iterar sobre os 3)
     colunas_template = num_ok.copy() + [c for c in cat_ok if c != 'Fornecedor']
-    
-    # Mapping in case internal names have issues
     mapeamento_encoding = {
         'projecao do brao': 'projecao do braço',
         'Altura de Instalao': 'Altura de Instalação',
@@ -306,8 +371,10 @@ with tab_lote:
     }
     colunas_amigaveis = [mapeamento_encoding.get(c, c) for c in colunas_template]
     
-    df_template = pd.DataFrame(columns=colunas_amigaveis)
+    # Adicionar coluna de Classificação
+    colunas_amigaveis.insert(0, 'Classificacao (M/C/P)')
     
+    df_template = pd.DataFrame(columns=colunas_amigaveis)
     buffer_template = io.BytesIO()
     with pd.ExcelWriter(buffer_template, engine='openpyxl') as writer:
         df_template.to_excel(writer, index=False)
@@ -321,87 +388,81 @@ with tab_lote:
     
     st.markdown('---')
     st.markdown('### 📤 2. Envie a Planilha Preenchida')
-    
     arquivo_up = st.file_uploader('Selecione o arquivo modificado', type=['xlsx', 'csv'])
     
     if arquivo_up is not None:
         try:
-            if arquivo_up.name.endswith('.csv'):
-                df_entrada = pd.read_csv(arquivo_up)
-            else:
-                df_entrada = pd.read_excel(arquivo_up)
+            df_entrada = pd.read_csv(arquivo_up) if arquivo_up.name.endswith('.csv') else pd.read_excel(arquivo_up)
             
-            st.success(f'Arquivo lido com sucesso! ({len(df_entrada)} linhas identificadas)')
+            # Tratamento robusto de decimais: aplica vírgula→ponto célula a célula antes de tentar converter
+            def normalizar_coluna(serie):
+                serie_norm = serie.apply(lambda x: str(x).replace(',', '.') if isinstance(x, str) else x)
+                convertida = pd.to_numeric(serie_norm, errors='coerce')
+                # Se pelo menos 50% dos valores converteram bem, usa a versão numérica
+                # Caso contrário (coluna de texto como Fornecedor), mantém original
+                if convertida.notna().mean() >= 0.5:
+                    return convertida
+                return serie
+            
+            for col in df_entrada.columns:
+                df_entrada[col] = normalizar_coluna(df_entrada[col])
+            
+            st.success(f'Arquivo lido com sucesso! ({len(df_entrada)} linhas)')
             
             with st.spinner('Realizando previsões...'):
                 df_saida = df_entrada.copy()
-                
-                # Prepara dataframe espelho com os nomes corretos esperados pelo pipeline
                 map_inverso = {v: k for k, v in mapeamento_encoding.items()}
                 df_pipeline = df_entrada.rename(columns=map_inverso)
+                
+                # Se a planilha não tiver Classificacao, usamos a do sidebar
+                tem_classe = 'Classificacao (M/C/P)' in df_entrada.columns
                 
                 for forn in FORNECEDORES:
                     df_run = df_pipeline.copy()
                     df_run['Fornecedor'] = forn
-                    
-                    # Garante que todas as colunas esperadas existem (mesmo que com NaN)
                     for col in num_ok + cat_ok:
                         if col not in df_run.columns:
                             df_run[col] = np.nan
                             
-                    # Previsões
-                    if modelo_lm:
-                        preds_lm = modelo_lm.predict(df_run)
-                        df_saida[f'Fluxo Luminoso (lm) - {forn}'] = [max(p, 0) for p in preds_lm]
-                    
-                    if modelo_w:
-                        preds_w = modelo_w.predict(df_run)
-                        df_saida[f'Potência (W) - {forn}'] = [max(p, 0) for p in preds_w]
-                        
-                        # Calcula a eficiêcia
-                        if modelo_lm and modelo_w:
-                            df_saida[f'Eficiência (lm/W) - {forn}'] = df_saida[f'Fluxo Luminoso (lm) - {forn}'] / df_saida[f'Potência (W) - {forn}']
+                    # Prever todas as métricas para a facilidade de extração, 
+                    # ou apenas as métricas dependendo da linha. Para simplificar no Lote, calculamos tudo.
+                    for m in ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']:
+                        if m in modelos:
+                            preds = modelos[m].predict(df_run)
+                            
+                            # Filtro dinâmico por linha baseada na classificação
+                            if tem_classe:
+                                classes = df_entrada['Classificacao (M/C/P)'].fillna('M').astype(str).str.upper().str[0]
+                                # Máscara de validade
+                                mask_valid = [False]*len(preds)
+                                for i, c in enumerate(classes):
+                                    if c == 'M' and m in ['lmed', 'uo', 'ul', 'w']: mask_valid[i] = True
+                                    elif c == 'C' and m in ['emed', 'uo', 'w']: mask_valid[i] = True
+                                    elif c == 'P' and m in ['emed', 'emin', 'w']: mask_valid[i] = True
+                                    
+                                preds = [p if valid else np.nan for p, valid in zip(preds, mask_valid)]
+                            
+                            df_saida[f'{TARGETS_MAP[m]} - {forn}'] = [max(p, 0) if pd.notna(p) else p for p in preds]
 
-                st.markdown('### ✨ Pré-visualização dos Resultados')
+                st.markdown('### ✨ Resultados')
                 st.dataframe(df_saida)
                 
-                # Download dos resultados
                 buffer_resultado = io.BytesIO()
                 with pd.ExcelWriter(buffer_resultado, engine='openpyxl') as writer:
                     df_saida.to_excel(writer, index=False)
-                
-                st.download_button(
-                    label='✅ Baixar Resultados (.xlsx)',
-                    data=buffer_resultado.getvalue(),
-                    file_name='resultados_simulacao.xlsx',
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    type='primary'
-                )
+                st.download_button('✅ Baixar Resultados (.xlsx)', data=buffer_resultado.getvalue(), file_name='resultados_simulacao.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', type='primary')
 
         except Exception as e:
-            st.error(f'Oops! Erro ao processar o arquivo. Verifique se o formato das colunas está correto. Erro detalhado: {str(e)}')
-
+            st.error(f'Erro ao processar: {str(e)}')
 
 # ── Info do modelo ─────────────────────────────────────────────────────────────
 with st.expander('ℹ️ Métricas dos Modelos Treinados'):
-    meta_lm_info = meta.get('modelo_lm', meta)
-    meta_w_info  = meta.get('modelo_w', {})
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown('**Modelo — Fluxo Luminoso (lm)**')
-        st.metric('Algoritmo', meta_lm_info.get('modelo', '—'))
-        st.metric('R² (teste)', f"{meta_lm_info.get('r2_teste','—'):.4f}" if meta_lm_info.get('r2_teste') else '—')
-        st.metric('MAE (teste)', f"{meta_lm_info.get('mae_teste','—'):.0f} lm" if meta_lm_info.get('mae_teste') else '—')
-    with c2:
-        st.markdown('**Modelo — Potência (W)**')
-        st.metric('Algoritmo', meta_w_info.get('modelo', '—') if meta_w_info else '—')
-        st.metric('R² (teste)', f"{meta_w_info.get('r2_teste','—'):.4f}" if meta_w_info.get('r2_teste') else '—')
-        st.metric('MAE (teste)', f"{meta_w_info.get('mae_teste','—'):.1f} W" if meta_w_info.get('mae_teste') else '—')
-
-st.markdown('---')
-st.markdown(
-    '<p style="text-align:center;color:#4b5563;font-size:.8rem;">'
-    '💡 Houer | Previsão de Iluminação Pública via Machine Learning</p>',
-    unsafe_allow_html=True,
-)
+    cols = st.columns(3)
+    for i, m in enumerate(['lmed', 'uo', 'ul', 'emed', 'emin', 'w']):
+        with cols[i % 3]:
+            st.markdown(f"**{TARGETS_MAP[m]}**")
+            info = meta.get(f'modelo_{m}')
+            if info:
+                st.metric('R² (teste)', f"{info.get('r2_teste','—'):.4f}")
+            else:
+                st.markdown('*Sem modelo*')

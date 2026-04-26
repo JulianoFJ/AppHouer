@@ -2,7 +2,7 @@
 02_treinar_modelo.py
 ---------------------
 Le o dataset.csv, treina dois modelos de Random Forest:
-  - modelo_lm.pkl   → preve Fluxo Luminoso (lm)
+  - modelo_lux.pkl   → preve Iluminância Média (lux)
   - modelo_w.pkl    → preve Potencia simulada (W)
 Salva tambem features.json com metadados de ambos.
 """
@@ -23,6 +23,7 @@ from sklearn.linear_model import Ridge
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
+from sklearn.base import clone
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -32,13 +33,21 @@ import joblib
 PASTA   = r'c:\Users\julia\OneDrive\Área de Trabalho\Houer\ML - Simulação'
 DATASET = os.path.join(PASTA, 'dataset.csv')
 
-TARGET_LM = 'Fluxo Luminoso - IP Principal (lm)'
-TARGET_W  = 'Potencia simulada - IP Principal (W)'
+TARGETS_INFO = {
+    'lmed': ('Luminância Média', 'cd/m²'),
+    'uo':   ('Fator de Uniformidade', ''),
+    'ul':   ('Uniformidade Longitudinal', ''),
+    'emed': ('Iluminância Média', 'lux'),
+    'emin': ('Iluminância mínima horizontal E (lux)', 'lux'),
+    'w':    ('Potencia simulada - IP Principal (W)', 'W')
+}
 
 FEATURES_NUMERICAS = [
     'Faixas de Rodagem',
     'Largura Via 1',
     'Largura Via 2',
+    'Largura Passeio 1',
+    'largura Passeio 2',
     'largura Canteiro Central',
     'altura da luminaria',
     'projecao do braço',
@@ -48,6 +57,7 @@ FEATURES_NUMERICAS = [
 ]
 
 FEATURES_CATEGORICAS = [
+    'Classificação viária',   # C0-C5, M1-M6, P4-P6
     'Tipo de estrutura',
     'posteacao',
     'Braço Novo',
@@ -97,7 +107,7 @@ def get_modelos():
     }
 
 # ── Função de treino/avaliação ────────────────────────────────────────────────
-def treinar(df_base, target_col, label):
+def treinar(df_base, target_col, label, label_unit):
     """Treina e avalia modelos para um target. Retorna o melhor pipeline."""
     if target_col not in df_base.columns:
         print(f'\n[AVISO] Coluna "{target_col}" nao encontrada no dataset. Pulando.')
@@ -120,14 +130,14 @@ def treinar(df_base, target_col, label):
     print('\n[CV] Avaliacao Cross-Validation (5-fold):\n')
     resultados = {}
     for nome, estimador in get_modelos().items():
-        pipe = Pipeline([('prep', preprocessor), ('model', estimador)])
+        pipe = Pipeline([('prep', clone(preprocessor)), ('model', estimador)])
         scores_r2  = cross_val_score(pipe, X_train, y_train, cv=5, scoring='r2', n_jobs=-1)
         scores_mae = cross_val_score(pipe, X_train, y_train, cv=5,
                                       scoring='neg_mean_absolute_error', n_jobs=-1)
         r2_m  = scores_r2.mean()
         mae_m = -scores_mae.mean()
         resultados[nome] = {'R2': r2_m, 'MAE': mae_m, 'pipe': pipe}
-        unidade = 'lm' if 'lm' in target_col else 'W'
+        unidade = label_unit
         print(f'  {nome:30s} | R2 = {r2_m:.4f} | MAE = {mae_m:.1f} {unidade}')
 
     melhor_nome = max(resultados, key=lambda k: resultados[k]['R2'])
@@ -140,7 +150,7 @@ def treinar(df_base, target_col, label):
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     r2   = r2_score(y_test, y_pred)
 
-    unidade = 'lm' if 'lm' in target_col else 'W'
+    unidade = label_unit
     print(f'\n[METRICAS] Conjunto de teste ({len(X_test)} amostras):')
     print(f'   MAE  = {mae:.1f} {unidade}')
     print(f'   RMSE = {rmse:.1f} {unidade}')
@@ -173,33 +183,30 @@ def treinar(df_base, target_col, label):
     }
     return melhor_pipe, meta
 
-# ── Treina modelo de Fluxo Luminoso (lm) ─────────────────────────────────────
-pipe_lm, meta_lm = treinar(df, TARGET_LM, 'Fluxo Luminoso')
+# ── Treina todos os modelos ───────────────────────────────────────────────────
+modelos_treinados = {}
+meta_geral = {
+    'features_numericas':  num_ok,
+    'features_categoricas': cat_ok,
+}
 
-# ── Treina modelo de Potencia (W) ─────────────────────────────────────────────
-pipe_w, meta_w = treinar(df, TARGET_W, 'Potencia')
+for key, (coluna, unidade) in TARGETS_INFO.items():
+    if coluna in df.columns:
+        pipe, meta = treinar(df, coluna, f'{key.upper()} ({unidade})', unidade)
+        if pipe:
+            modelos_treinados[key] = pipe
+            meta_geral[f'modelo_{key}'] = meta
 
 # ── Salva modelos e metadados ─────────────────────────────────────────────────
 print(f'\n{"="*60}')
 print('[SALVANDO]')
 
-if pipe_lm:
-    path_lm = os.path.join(PASTA, 'modelo_lm.pkl')
-    joblib.dump(pipe_lm, path_lm)
-    print(f'[OK] Modelo lm salvo:  {path_lm}')
-
-if pipe_w:
-    path_w = os.path.join(PASTA, 'modelo_w.pkl')
-    joblib.dump(pipe_w, path_w)
-    print(f'[OK] Modelo W  salvo:  {path_w}')
+for key, pipe in modelos_treinados.items():
+    path_mod = os.path.join(PASTA, f'modelo_{key}.pkl')
+    joblib.dump(pipe, path_mod)
+    print(f'[OK] Modelo {key} salvo:  {path_mod}')
 
 features_path = os.path.join(PASTA, 'features.json')
-meta_geral = {
-    'features_numericas':  num_ok,
-    'features_categoricas': cat_ok,
-    'modelo_lm': meta_lm,
-    'modelo_w':  meta_w,
-}
 with open(features_path, 'w', encoding='utf-8') as f:
     json.dump(meta_geral, f, ensure_ascii=False, indent=2)
 print(f'[OK] Metadados salvos: {features_path}')

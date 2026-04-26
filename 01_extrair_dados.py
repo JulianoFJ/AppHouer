@@ -18,11 +18,13 @@ PASTA = r'c:\Users\julia\OneDrive\Área de Trabalho\Houer\ML - Simulação'
 
 FORNECEDORES_ALVO = ['LEDSTAR', 'SX LIGHTING', 'TECNOWATT']
 
-# Features físicas/geométricas (SEM classificação viária/pedonal/ciclovia)
+# Features físicas/geométricas
 FEATURES_NUMERICAS = [
     'Faixas de Rodagem',
     'Largura Via 1',
     'Largura Via 2',
+    'Largura Passeio 1',
+    'largura Passeio 2',
     'largura Canteiro Central',
     'altura da luminaria',
     'projecao do braço',
@@ -32,15 +34,21 @@ FEATURES_NUMERICAS = [
 ]
 
 FEATURES_CATEGORICAS = [
+    'Classificação viária',   # C0-C5, M1-M6, P4-P6 — essencial para previsão por subclasse
     'Tipo de estrutura',
     'posteacao',
     'Braço Novo',
     'Fornecedor',   # feature — o modelo aprende o padrão de cada fornecedor
 ]
 
-TARGET_LM = 'Fluxo Luminoso - IP Principal (lm)'
-TARGET_W  = ' Potência simulada - IP Principal (W)'   # espaço no início é do Excel
-TARGETS = [TARGET_LM, TARGET_W]
+TARGET_LMED = 'Luminância Média'
+TARGET_UO   = 'Fator de Uniformidade'
+TARGET_UL   = 'Uniformidade Longitudinal'
+TARGET_EMED = 'Iluminância Média'
+TARGET_EMIN = 'Iluminância mínima horizontal E (lux)'
+TARGET_W    = ' Potência simulada - IP Principal (W)'   # espaço no início é do Excel
+
+TARGETS = [TARGET_LMED, TARGET_UO, TARGET_UL, TARGET_EMED, TARGET_EMIN, TARGET_W]
 
 # ── Extração ─────────────────────────────────────────────────────────────────
 arquivos = [f for f in os.listdir(PASTA) if f.endswith('.xlsx')]
@@ -100,14 +108,11 @@ if 'Fornecedor' in df_total.columns:
     print(f'\nApós filtro de fornecedores: {len(df_total)} linhas')
     print(df_total['Fornecedor'].value_counts().to_string())
 
-# Limpa TARGET lm
-if TARGET_LM in df_total.columns:
-    df_total[TARGET_LM] = pd.to_numeric(df_total[TARGET_LM], errors='coerce')
-    antes = len(df_total)
-    df_total = df_total.dropna(subset=[TARGET_LM])
-    df_total = df_total[df_total[TARGET_LM] > 0]
-    print(f'\nLinhas removidas por target invalido: {antes - len(df_total)}')
-    print(f'Dataset final: {len(df_total)} linhas')
+# Converte os alvos para numérico
+for tgt in TARGETS:
+    if tgt in df_total.columns:
+        df_total[tgt] = pd.to_numeric(df_total[tgt], errors='coerce')
+        print(f'Valores válidos para {tgt}: {df_total[tgt].notna().sum()}')
 
 # Limpa TARGET W (potencia) — renomeia para coluna sem espaco
 if TARGET_W in df_total.columns:
@@ -126,8 +131,13 @@ output = os.path.join(PASTA, 'dataset.csv')
 df_total.to_csv(output, index=False, encoding='utf-8-sig')
 
 print(f'\n[OK] Dataset salvo em: {output}')
-print(f'\nEstatisticas do alvo - Lux (lm):')
-print(df_total[TARGET_LM].describe().to_string())
+print(f'\nResumo Estatístico dos Alvos:')
+for tgt in TARGETS:
+    if tgt in df_total.columns:
+        col_clean = 'Potencia simulada - IP Principal (W)' if tgt == TARGET_W else tgt
+        print(f'--- {col_clean} ---')
+        print(df_total[col_clean].describe().to_string())
+        print()
 
 if 'Potencia simulada - IP Principal (W)' in df_total.columns:
     print(f'\nEstatisticas do alvo - Potencia (W):')
@@ -137,8 +147,6 @@ print(f'\nAmostra por fornecedor:')
 for forn in FORNECEDORES_ALVO:
     sub = df_total[df_total['Fornecedor'] == forn]
     if len(sub) > 0:
-        lm_med = sub[TARGET_LM].mean()
-        w_med  = sub['Potencia simulada - IP Principal (W)'].mean() if 'Potencia simulada - IP Principal (W)' in sub.columns else float('nan')
-        print(f'   {forn}: {len(sub)} linhas | media {lm_med:.0f} lm | {w_med:.0f} W')
+        print(f'   {forn}: {len(sub)} linhas')
     else:
         print(f'   {forn}: sem dados')
