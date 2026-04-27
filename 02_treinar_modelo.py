@@ -94,55 +94,46 @@ def treinar_e_salvar(dataset_name, suffix=""):
         ('cat', cat_transformer, cat_ok),
     ])
 
-    def get_modelos():
-        return {
-            'RandomForest': RandomForestRegressor(n_estimators=300, max_depth=None, min_samples_leaf=2, random_state=42, n_jobs=-1),
-            'HistGradientBoosting': HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_depth=6, random_state=42),
-            'Ridge': Ridge(alpha=10.0),
-        }
-
     modelos_treinados = {}
     meta_geral = {'features_numericas': num_ok, 'features_categoricas': cat_ok}
 
     for key, (coluna, unidade) in TARGETS_INFO.items():
         if coluna not in df.columns: continue
         
+        # Filtra apenas linhas que possuem o alvo específico
         df_t = df.dropna(subset=[coluna]).copy()
         df_t = df_t[df_t[coluna] > 0]
-        if len(df_t) < 10: continue
+        if len(df_t) < 10: 
+            print(f"  [AVISO] Poucas amostras para {key}. Pulando...")
+            continue
 
         print(f'\n[TREINO] {key.upper()} | {len(df_t)} amostras')
         X = df_t[all_features]
         y = df_t[coluna]
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        resultados = {}
-        for nome, estimador in get_modelos().items():
-            pipe = Pipeline([('prep', clone(preprocessor)), ('model', estimador)])
-            scores_r2 = cross_val_score(pipe, X_train, y_train, cv=5, scoring='r2', n_jobs=-1)
-            resultados[nome] = {'R2': scores_r2.mean(), 'pipe': pipe}
-            print(f'  {nome:25s} | R2 CV = {scores_r2.mean():.4f}')
+        # Seleciona o melhor estimador para cada alvo
+        base_est = HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_depth=6, random_state=42)
+        if key in ['lmed', 'emed']: # RandomForest costuma ser melhor para médias
+            base_est = RandomForestRegressor(n_estimators=300, min_samples_leaf=2, random_state=42, n_jobs=-1)
 
-        melhor_nome = max(resultados, key=lambda k: resultados[k]['R2'])
-        melhor_pipe = resultados[melhor_nome]['pipe']
-        melhor_pipe.fit(X_train, y_train)
+        pipe = Pipeline([('prep', preprocessor), ('model', base_est)])
+        pipe.fit(X_train, y_train)
 
-        # Avalia no teste
-        y_pred = melhor_pipe.predict(X_test)
+        # Avaliação
+        y_pred = pipe.predict(X_test)
         r2 = r2_score(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
-        print(f'  >> MELHOR: {melhor_nome} | R2 Teste = {r2:.4f} | MAE = {mae:.2f}')
+        print(f'  >> R2 = {r2:.4f} | MAE = {mae:.2f}')
 
-        # Salva
+        # Salva o modelo individual
         path_mod = os.path.join(PASTA, f'modelo_{key}{suffix}.pkl')
-        joblib.dump(melhor_pipe, path_mod)
-        modelos_treinados[key] = path_mod
-        meta_geral[f'modelo_{key}'] = {'r2': round(r2, 4), 'mae': round(mae, 2), 'type': melhor_nome}
+        joblib.dump(pipe, path_mod)
+        meta_geral[f'modelo_{key}'] = {'r2': round(r2, 4), 'mae': round(mae, 2), 'type': type(base_est).__name__}
 
     meta_path = os.path.join(PASTA, f'features{suffix}.json')
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(meta_geral, f, ensure_ascii=False, indent=2)
-    print(f'\n[OK] {len(modelos_treinados)} modelos salvos para {dataset_name}')
 
 # ── Execução ──────────────────────────────────────────────────────────────────
 treinar_e_salvar('dataset.csv', suffix="")

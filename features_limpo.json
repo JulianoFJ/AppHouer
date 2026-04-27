@@ -21,31 +21,31 @@
   "modelo_lmed": {
     "r2": 0.2788,
     "mae": 4.15,
-    "type": "RandomForest"
+    "type": "RandomForestRegressor"
   },
   "modelo_uo": {
-    "r2": -1.1503,
-    "mae": 0.19,
-    "type": "Ridge"
+    "r2": -1.8202,
+    "mae": 0.13,
+    "type": "HistGradientBoostingRegressor"
   },
   "modelo_ul": {
     "r2": -0.0511,
     "mae": 1.48,
-    "type": "HistGradientBoosting"
+    "type": "HistGradientBoostingRegressor"
   },
   "modelo_emed": {
     "r2": 0.9088,
     "mae": 1.2,
-    "type": "RandomForest"
+    "type": "RandomForestRegressor"
   },
   "modelo_emin": {
     "r2": 0.8196,
     "mae": 1.35,
-    "type": "HistGradientBoosting"
+    "type": "HistGradientBoostingRegressor"
   },
   "modelo_w": {
     "r2": 0.8134,
     "mae": 5.58,
-    "type": "HistGradientBoosting"
+    "type": "HistGradientBoostingRegressor"
   }
 }
