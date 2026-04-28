@@ -18,34 +18,113 @@
     "Braço Novo",
     "Fornecedor"
   ],
+  "feature_w_col": "Potencia simulada - IP Principal (W)",
+  "modelos_dependem_de_w": [
+    "emed",
+    "emin"
+  ],
   "modelo_lmed": {
     "r2": 0.2788,
     "mae": 4.15,
-    "type": "RandomForestRegressor"
+    "type": "RandomForestRegressor",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via"
+    ]
   },
   "modelo_uo": {
     "r2": -1.8202,
     "mae": 0.13,
-    "type": "HistGradientBoostingRegressor"
+    "type": "HistGradientBoostingRegressor",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via"
+    ]
   },
   "modelo_ul": {
     "r2": -0.0511,
     "mae": 1.48,
-    "type": "HistGradientBoostingRegressor"
+    "type": "HistGradientBoostingRegressor",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via"
+    ]
   },
   "modelo_emed": {
-    "r2": 0.9088,
-    "mae": 1.2,
-    "type": "RandomForestRegressor"
+    "r2": 0.9008,
+    "mae": 1.1,
+    "type": "RandomForestRegressor",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via",
+      "Potencia simulada - IP Principal (W)"
+    ]
   },
   "modelo_emin": {
-    "r2": 0.8196,
-    "mae": 1.35,
-    "type": "HistGradientBoostingRegressor"
+    "r2": 0.8205,
+    "mae": 1.14,
+    "type": "HistGradientBoostingRegressor",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via",
+      "Potencia simulada - IP Principal (W)"
+    ]
   },
   "modelo_w": {
     "r2": 0.8134,
     "mae": 5.58,
-    "type": "HistGradientBoostingRegressor"
+    "type": "HistGradientBoostingRegressor",
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via"
+    ]
   }
 }

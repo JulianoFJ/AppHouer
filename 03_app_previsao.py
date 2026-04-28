@@ -11,8 +11,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 from fpdf import FPDF
 
-# Chave API do Google Maps (recuperada do script de georreferenciamento)
-GOOGLE_MAPS_API_KEY = "AIzaSyAN_M7Zet2BfygkMmGD10E1jrR5d_akrw8"
+def get_google_maps_api_key():
+    """Lê a chave da API via Streamlit Secrets ou variável de ambiente."""
+    try:
+        if "GOOGLE_MAPS_API_KEY" in st.secrets:
+            return st.secrets["GOOGLE_MAPS_API_KEY"]
+    except Exception:
+        pass
+    return os.getenv("GOOGLE_MAPS_API_KEY")
+
+GOOGLE_MAPS_API_KEY = get_google_maps_api_key()
 
 # ── Configuração da página ────────────────────────────────────────────────────
 st.set_page_config(
@@ -277,6 +285,40 @@ def carregar_modelos(suffix=""):
             modelos[key] = joblib.load(path)
     return modelos, meta
 
+def prever_metricas_com_dependencia_w(df_base: pd.DataFrame, modelos: dict, metricas: list, meta: dict):
+    """Prevê métricas respeitando dependência de W (emed/emin treinados com coluna de potência)."""
+    preds = {}
+    w_col = meta.get('feature_w_col', 'Potencia simulada - IP Principal (W)')
+    dependem_w = set(meta.get('modelos_dependem_de_w', []))
+
+    # 1) Prevê W primeiro quando necessário
+    if 'w' in metricas and 'w' in modelos:
+        preds_w = modelos['w'].predict(df_base)
+        preds['w'] = np.maximum(preds_w, 0)
+    elif 'w' in metricas:
+        preds['w'] = np.array([np.nan] * len(df_base))
+
+    # 2) Prevê demais métricas
+    for m in metricas:
+        if m == 'w':
+            continue
+        if m not in modelos:
+            preds[m] = np.array([np.nan] * len(df_base))
+            continue
+        try:
+            if m in dependem_w:
+                df_m = df_base.copy()
+                if w_col not in df_m.columns:
+                    df_m[w_col] = preds.get('w', np.array([np.nan] * len(df_base)))
+                p = modelos[m].predict(df_m)
+            else:
+                p = modelos[m].predict(df_base)
+            preds[m] = np.maximum(p, 0)
+        except Exception:
+            preds[m] = np.array([np.nan] * len(df_base))
+
+    return preds
+
 # ── Carrega banco de dados de luminarias ────────────────────────────────────
 @st.cache_data
 def carregar_banco_luminarias():
@@ -329,6 +371,31 @@ def buscar_custo(banco: pd.DataFrame, fornecedor: str, potencia_w: float):
 
 # ── Carrega banco de dados de luminarias ────────────────────────────────────
 banco_luminarias = carregar_banco_luminarias()
+
+@st.cache_data
+def carregar_media_historica():
+    """Lê o dataset.csv original e calcula a média de potência por classe para comparação."""
+    caminho = os.path.join(PASTA, 'dataset.csv')
+    if not os.path.exists(caminho):
+        return pd.DataFrame(columns=['Classe_Resumo', 'Média Histórica (W)'])
+    try:
+        df_hist = pd.read_csv(caminho)
+        # Tenta achar colunas
+        col_classe = next((c for c in df_hist.columns if 'classifica' in c.lower() and 'vi' in c.lower()), None)
+        col_pot = next((c for c in df_hist.columns if 'potencia' in c.lower() and '(w)' in c.lower()), None)
+        if not col_classe or not col_pot:
+            return pd.DataFrame(columns=['Classe_Resumo', 'Média Histórica (W)'])
+        
+        df_hist['Classe_Resumo'] = df_hist[col_classe].fillna('N/A').astype(str).str.upper()
+        df_hist[col_pot] = pd.to_numeric(df_hist[col_pot], errors='coerce')
+        medias = df_hist.groupby('Classe_Resumo')[col_pot].mean().reset_index()
+        medias.rename(columns={col_pot: 'Média Histórica (W)'}, inplace=True)
+        return medias
+    except Exception:
+        return pd.DataFrame(columns=['Classe_Resumo', 'Média Histórica (W)'])
+
+medias_historicas = carregar_media_historica()
+
 
 # ── Header ────────────────────────────────────────────────────────────────────
 col_l, col_r = st.columns([1, 3])
@@ -385,6 +452,7 @@ with st.sidebar:
     modelos, meta = carregar_modelos(sufixo_modelo)
     num_ok = meta.get('features_numericas', [])
     cat_ok = meta.get('features_categoricas', [])
+    feature_w_col = meta.get('feature_w_col', 'Potencia simulada - IP Principal (W)')
 
     # Métricas cujos modelos são confiáveis o suficiente para verificar conformidade NBR
     # Threshold: R² >= 0.5. Modelos abaixo disso (ex: uo R²=-57.5, ul R²=-0.05) predizem
@@ -416,6 +484,7 @@ with st.sidebar:
     dist_postes    = st.slider('Distância entre Postes (m)',  10.0, 60.0, 35.0, step=1.0)
     dist_poste_via = st.slider('Distância Poste à Via (m)',    0.0,  3.0,  0.5, step=0.25)
     altura_inst    = st.slider('Altura de Instalação (m)',     4.0, 16.0, 10.0, step=0.5)
+    st.caption("ℹ️ Informacional — não integra o modelo preditivo atual.")
 
     st.markdown('### 🔩 Configurações')
     tipo_estrutura = st.selectbox('Tipo de Estrutura', ['Braço', 'Suporte'])
@@ -441,7 +510,10 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Erro na geocodificação: {e}")
         else:
-            st.info("Insira um endereço para localizar.")
+            if not GOOGLE_MAPS_API_KEY:
+                st.warning("Defina `GOOGLE_MAPS_API_KEY` em `st.secrets` (deploy) ou variável de ambiente (local).")
+            else:
+                st.info("Insira um endereço para localizar.")
 
     st.markdown('### ⚡ Eficientização')
     potencia_atual = st.number_input('Potência Atual (W)', min_value=0.0, value=250.0, step=10.0, help="Potência da luminária instalada atualmente (ex: Sódio 250W, 400W)")
@@ -806,7 +878,7 @@ with tab_individual:
         st.plotly_chart(fig_map, use_container_width=True)
         st.caption(f"📌 {st.session_state.address}")
 
-    def montar_entrada(fornecedor):
+    def montar_entrada(fornecedor, dist_override=None):
         dados = {
             'Faixas de Rodagem':        faixas,
             'Largura Via 1':            largura_via1,
@@ -817,7 +889,7 @@ with tab_individual:
             'altura da luminaria':      altura_lum,
             'projecao do braço':        projecao_braco,
             'projecao do brao':         projecao_braco,
-            'distancia entre postes':   dist_postes,
+            'distancia entre postes':   dist_override if dist_override is not None else dist_postes,
             'distancia Poste a via':    dist_poste_via,
             'Altura de Instalação':     altura_inst,
             'Altura de Instalao':       altura_inst,
@@ -828,42 +900,64 @@ with tab_individual:
             'Brao Novo':                braco_novo,
             'Fornecedor':               fornecedor,
         }
-        colunas = num_ok + cat_ok
+        colunas = list(dict.fromkeys(num_ok + cat_ok + [feature_w_col]))
         return pd.DataFrame([{k: dados.get(k, np.nan) for k in colunas}])
 
-    # Roda as predições e busca melhorias
+    # Roda as predições para todos os fornecedores
     resultados = {m: {} for m in metricas_ativas}
-    sugestoes_por_forn = {}
+    config_dicts = {}
 
     for forn in FORNECEDORES:
         X_in = montar_entrada(forn)
-        config_dict = X_in.iloc[0].to_dict()
-        
-        # Predição base
+        config_dicts[forn] = X_in.iloc[0].to_dict()
+        preds_in = prever_metricas_com_dependencia_w(X_in, modelos, metricas_ativas, meta)
         for m in metricas_ativas:
-            if m in modelos:
-                try:
-                    val = modelos[m].predict(X_in)[0]
-                    resultados[m][forn] = max(val, 0)
-                except Exception as e:
-                    resultados[m][forn] = None
-            else:
-                resultados[m][forn] = None
-        
-        # Verifica se atende tudo — usa apenas métricas cujos modelos são confiáveis
-        falhou = False
-        for m in metricas_ativas:
-            if m == 'w': continue
-            if m not in metricas_confiaveis: continue
-            val = resultados[m].get(forn)
-            req_min = info_nbr.get(m)
-            if val is not None and req_min is not None:
-                if val < req_min:
-                    falhou = True
-                    break
-        
+            v = preds_in.get(m, np.array([np.nan]))[0]
+            resultados[m][forn] = None if pd.isna(v) else float(v)
+
+    # ── Ajuste de Potência pela Hierarquia NBR ───────────────────────────────
+    # Classes M: o modelo lmed tem R²=0.28 e superestima luminância, então
+    # o gatilho "pred < req" nunca dispara. Usa-se fator proporcional direto
+    # em relação ao M3 (baseline), garantindo M1 > M3 > M6 em potência.
+    # Classes C e P: o modelo emed é confiável (R²>0.8) — escalonamento
+    # condicional apenas quando pred_ilum < req (mantém comportamento atual).
+    fator_m = None
+    metric_ref = 'emed'
+    req_ilum_ref = None
+
+    if 'w' in metricas_ativas:
+        if subclasse.startswith('M'):
+            req_m3_base = NBR5101['M3']['lmed']   # 1.0 cd/m²
+            req_classe  = info_nbr.get('lmed', req_m3_base)
+            fator_m     = req_classe / req_m3_base
+            metric_ref  = 'lmed'
+            for forn in FORNECEDORES:
+                if resultados['w'].get(forn) is not None:
+                    resultados['w'][forn] *= fator_m
+        else:
+            metric_ref   = 'emed'
+            req_ilum_ref = info_nbr.get(metric_ref)
+            if metric_ref in metricas_ativas and req_ilum_ref:
+                for forn in FORNECEDORES:
+                    pred_ilum = resultados[metric_ref].get(forn)
+                    pred_pot  = resultados['w'].get(forn)
+                    if (pred_ilum is not None and pred_ilum > 0
+                            and pred_pot is not None and pred_ilum < req_ilum_ref):
+                        resultados['w'][forn] = pred_pot * (req_ilum_ref / pred_ilum)
+
+    # Verifica conformidade e gera sugestões estruturais
+    sugestoes_por_forn = {}
+    for forn in FORNECEDORES:
+        falhou = any(
+            resultados[m].get(forn) is not None
+            and info_nbr.get(m) is not None
+            and resultados[m][forn] < info_nbr[m]
+            for m in metricas_ativas
+            if m != 'w' and m in metricas_confiaveis
+        )
         if falhou:
-            sugestoes_por_forn[forn] = analisar_melhorias(forn, modelos, metricas_ativas, info_nbr, config_dict, num_ok, cat_ok)
+            sugestoes_por_forn[forn] = analisar_melhorias(
+                forn, modelos, metricas_ativas, info_nbr, config_dicts[forn], num_ok, cat_ok)
 
     # Exibe os Cards Dinâmicos
     st.markdown('<p class="section-title">📊 Resultados por Fornecedor</p>', unsafe_allow_html=True)
@@ -909,6 +1003,85 @@ with tab_individual:
             html_content += "</div>"
             st.markdown(html_content, unsafe_allow_html=True)
     
+    # ── Detecção Proativa de Ponto Escuro (CPE) ──────────────────────────────
+    # Aciona quando: distância ≥ 40m OU potência prevista > 40% acima da média histórica.
+    # Calcula cenário com poste intermediário (distância/2) e mostra comparativo.
+    DIST_CPE_MIN = 40.0
+    POT_DESVIO_FATOR = 1.40
+
+    pot_previstas = [resultados['w'].get(f) for f in FORNECEDORES if 'w' in resultados and resultados['w'].get(f) is not None]
+    pot_media_prev = np.mean(pot_previstas) if pot_previstas else None
+
+    row_hist = medias_historicas[medias_historicas['Classe_Resumo'] == subclasse.upper()] if not medias_historicas.empty else pd.DataFrame()
+    media_hist_w = row_hist['Média Histórica (W)'].iloc[0] if not row_hist.empty else None
+
+    cpe_por_distancia = dist_postes >= DIST_CPE_MIN
+    cpe_por_desvio = (
+        media_hist_w is not None and pot_media_prev is not None
+        and pot_media_prev > media_hist_w * POT_DESVIO_FATOR
+    )
+
+    if 'w' in metricas_ativas and (cpe_por_distancia or cpe_por_desvio):
+        dist_cpe = dist_postes / 2
+        resultados_cpe = {m: {} for m in metricas_ativas}
+
+        for forn in FORNECEDORES:
+            X_cpe = montar_entrada(forn, dist_override=dist_cpe)
+            preds_cpe = prever_metricas_com_dependencia_w(X_cpe, modelos, metricas_ativas, meta)
+            for m in metricas_ativas:
+                v = preds_cpe.get(m, np.array([np.nan]))[0]
+                resultados_cpe[m][forn] = None if pd.isna(v) else float(v)
+
+        # Aplica ajuste NBR no cenário CPE — mesma lógica do cenário base
+        if subclasse.startswith('M') and fator_m is not None:
+            for forn in FORNECEDORES:
+                if resultados_cpe['w'].get(forn) is not None:
+                    resultados_cpe['w'][forn] *= fator_m
+        elif metric_ref in metricas_ativas and req_ilum_ref:
+            for forn in FORNECEDORES:
+                p_ilum = resultados_cpe[metric_ref].get(forn)
+                p_pot  = resultados_cpe['w'].get(forn)
+                if (p_ilum is not None and p_ilum > 0
+                        and p_pot is not None and p_ilum < req_ilum_ref):
+                    resultados_cpe['w'][forn] = p_pot * (req_ilum_ref / p_ilum)
+
+        motivo_parts = []
+        if cpe_por_distancia:
+            motivo_parts.append(f"distância de **{dist_postes:.0f}m** entre postes (limite recomendado: {DIST_CPE_MIN:.0f}m)")
+        if cpe_por_desvio:
+            motivo_parts.append(f"potência prevista **{pot_media_prev:.0f}W** acima da média histórica **{media_hist_w:.0f}W** (+{((pot_media_prev/media_hist_w)-1)*100:.0f}%)")
+
+        st.markdown('<p class="section-title">⚠️ Correção de Ponto Escuro (CPE)</p>', unsafe_allow_html=True)
+        st.warning(
+            "**Risco de ponto escuro detectado** — " + " e ".join(motivo_parts) + ".\n\n"
+            f"Cenário proposto: inserção de estrutura intermediária reduz a distância de **{dist_postes:.0f}m → {dist_cpe:.0f}m**."
+        )
+
+        cpe_cols = st.columns(3)
+        for i, forn in enumerate(FORNECEDORES):
+            cor = CORES[forn]
+            with cpe_cols[i]:
+                cpe_html = f'<div class="forn-card" style="border-top-color:#f59e0b;">'
+                cpe_html += f'<div class="forn-name" style="color:#f59e0b;">CPE — {forn}</div>'
+                cpe_html += f'<div style="font-size:0.75rem;color:#94a3b8;margin-bottom:10px;">Distância: {dist_postes:.0f}m → <b style="color:#f59e0b;">{dist_cpe:.0f}m</b></div>'
+
+                for m in metricas_ativas:
+                    val_orig = resultados[m].get(forn)
+                    val_cpe  = resultados_cpe[m].get(forn)
+                    if val_cpe is None:
+                        continue
+                    delta = val_cpe - val_orig if val_orig is not None else None
+                    if delta is not None:
+                        delta_color = '#22c55e' if delta >= 0 else '#ef4444'
+                        delta_str = f' <span style="color:{delta_color};font-size:0.7rem;">({("+" if delta >= 0 else "")}{delta:.2f})</span>'
+                    else:
+                        delta_str = ''
+                    cpe_html += f'<div class="metric-label"><span>{TARGETS_MAP[m]}</span></div>'
+                    cpe_html += f'<div class="metric-value">{val_cpe:,.2f} <span class="metric-unit">{UNITS_MAP[m]}</span>{delta_str}</div>'
+
+                cpe_html += '</div>'
+                st.markdown(cpe_html, unsafe_allow_html=True)
+
     # ── Botão de Exportação PDF
     st.markdown("---")
     addr = st.session_state.get('address', 'Não informado')
@@ -1096,37 +1269,38 @@ with tab_lote:
                 for forn in FORNECEDORES:
                     df_run = df_pipeline.copy()
                     df_run['Fornecedor'] = forn
-                    for col in num_ok + cat_ok:
+                    for col in list(dict.fromkeys(num_ok + cat_ok + [feature_w_col])):
                         if col not in df_run.columns:
                             df_run[col] = np.nan
-                            
-                    # Prever todas as métricas para a facilidade de extração, 
-                    # ou apenas as métricas dependendo da linha. Para simplificar no Lote, calculamos tudo.
-                    for m in ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']:
-                        if m in modelos:
-                            preds = modelos[m].predict(df_run)
-                            
-                            # Filtro dinâmico por linha baseada na classificação
-                            if tem_classe:
-                                classes = df_pipeline['Classificação viária'].fillna('M').astype(str).str.upper().str[0]
-                                # Máscara de validade
-                                mask_valid = [False]*len(preds)
-                                for i, c in enumerate(classes):
-                                    if c == 'M' and m in ['lmed', 'uo', 'ul', 'w']: mask_valid[i] = True
-                                    elif c == 'C' and m in ['emed', 'uo', 'w']: mask_valid[i] = True
-                                    elif c == 'P' and m in ['emed', 'emin', 'w']: mask_valid[i] = True
-                                    
-                                preds = [p if valid else np.nan for p, valid in zip(preds, mask_valid)]
-                            
-                            df_saida[f'{TARGETS_MAP[m]} - {forn}'] = [max(p, 0) if pd.notna(p) else p for p in preds]
+
+                    metricas_lote = ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']
+                    preds_all = prever_metricas_com_dependencia_w(df_run, modelos, metricas_lote, meta)
+
+                    # Filtro dinâmico por linha baseada na classificação
+                    classes = None
+                    if tem_classe:
+                        classes = df_pipeline['Classificação viária'].fillna('M').astype(str).str.upper().str[0]
+
+                    for m in metricas_lote:
+                        if m not in preds_all:
+                            continue
+                        preds = preds_all[m]
+                        if tem_classe:
+                            mask_valid = [False] * len(preds)
+                            for i, c in enumerate(classes):
+                                if c == 'M' and m in ['lmed', 'uo', 'ul', 'w']: mask_valid[i] = True
+                                elif c == 'C' and m in ['emed', 'uo', 'w']: mask_valid[i] = True
+                                elif c == 'P' and m in ['emed', 'emin', 'w']: mask_valid[i] = True
+                            preds = [p if valid else np.nan for p, valid in zip(preds, mask_valid)]
+
+                        df_saida[f'{TARGETS_MAP[m]} - {forn}'] = [max(p, 0) if pd.notna(p) else p for p in preds]
 
                 # ── Pós-processamento: Ajuste de Potência pela Hierarquia NBR ──────────────
-                # Se a iluminância prevista está abaixo do mínimo exigido pela classe NBR,
-                # a potência é escalada proporcionalmente (assume P ∝ Iluminância para a
-                # mesma geometria). Garante que vias mais exigentes (ex: C0) recebam
-                # potência condizente com os requisitos da norma.
+                # M: fator proporcional direto (lmed R²=0.28 não é confiável).
+                # C/P: escalonamento condicional por iluminância (emed R²>0.8).
                 if tem_classe:
                     classes_serie = df_pipeline['Classificação viária'].fillna('').astype(str).str.upper()
+                    req_m3_lote = NBR5101['M3']['lmed']
                     for forn in FORNECEDORES:
                         pot_col = f'{TARGETS_MAP["w"]} - {forn}'
                         if pot_col not in df_saida.columns:
@@ -1135,18 +1309,20 @@ with tab_lote:
                             info_v = NBR5101.get(classe, {})
                             if not info_v:
                                 continue
-                            # Métrica de iluminância principal da classe
-                            metric_ref = 'lmed' if classe.startswith('M') else 'emed'
-                            ilum_col   = f'{TARGETS_MAP[metric_ref]} - {forn}'
-                            req        = info_v.get(metric_ref)
-                            if req is None or ilum_col not in df_saida.columns:
+                            pred_pot = df_saida.loc[idx_loc, pot_col]
+                            if pd.isna(pred_pot):
                                 continue
-                            pred_ilum = df_saida.loc[idx_loc, ilum_col]
-                            pred_pot  = df_saida.loc[idx_loc, pot_col]
-                            if (pd.notna(pred_ilum) and pred_ilum > 0
-                                    and pd.notna(pred_pot) and pred_ilum < req):
-                                # Escala a potência proporcionalmente ao déficit de iluminância
-                                df_saida.loc[idx_loc, pot_col] = pred_pot * (req / pred_ilum)
+                            if classe.startswith('M'):
+                                fator_lote = info_v.get('lmed', req_m3_lote) / req_m3_lote
+                                df_saida.loc[idx_loc, pot_col] = pred_pot * fator_lote
+                            else:
+                                ilum_col = f'{TARGETS_MAP["emed"]} - {forn}'
+                                req = info_v.get('emed')
+                                if req is None or ilum_col not in df_saida.columns:
+                                    continue
+                                pred_ilum = df_saida.loc[idx_loc, ilum_col]
+                                if (pd.notna(pred_ilum) and pred_ilum > 0 and pred_ilum < req):
+                                    df_saida.loc[idx_loc, pot_col] = pred_pot * (req / pred_ilum)
 
                 # Cálculo de Eficientização e Conformidade por linha no lote
                 # Detecta a coluna de potência atual de forma robusta (suporta template novo e arquivos legados)
@@ -1184,7 +1360,81 @@ with tab_lote:
                                         break
                             status_list.append('✔ Atende' if atende_linha else '✘ Não Atende')
                         df_saida[f'Status NBR - {forn}'] = status_list
-                
+
+                # ── CPE: Detecção, Cálculo e Preenchimento do Template ─────────────────
+                # Mesma lógica da simulação individual — distância ≥ 40m aciona CPE.
+                # Para cada linha flagada, roda predições com distância/2 e aplica
+                # o mesmo ajuste NBR proporcional, garantindo consistência total.
+                col_dist_lote = next(
+                    (c for c in df_saida.columns if 'distancia entre' in c.lower()), None
+                )
+                if col_dist_lote:
+                    cpe_sim, cpe_qtd_veic, cpe_obs_list = [], [], []
+                    for _, row_c in df_saida.iterrows():
+                        dist_v = pd.to_numeric(row_c.get(col_dist_lote, 0), errors='coerce') or 0
+                        if dist_v >= 40.0:
+                            cpe_sim.append('Sim')
+                            cpe_qtd_veic.append(1)
+                            cpe_obs_list.append(f"Redução {dist_v:.0f}m → {dist_v/2:.0f}m")
+                        else:
+                            cpe_sim.append('Não')
+                            cpe_qtd_veic.append(0)
+                            cpe_obs_list.append('')
+                    df_saida['Correção de Ponto Escuro (CPE)'] = cpe_sim
+                    df_saida['Quantidade de pontos adicionados para via de veículo'] = cpe_qtd_veic
+                    df_saida['Observação CPE  (Reduçao entre postes e/ou Tipo de Posteação)'] = cpe_obs_list
+
+                    # Predições CPE para linhas flagadas
+                    cpe_indices = df_saida[df_saida['Correção de Ponto Escuro (CPE)'] == 'Sim'].index
+                    if len(cpe_indices) > 0:
+                        df_pipeline_cpe = df_pipeline.loc[cpe_indices].copy()
+                        if 'distancia entre postes' in df_pipeline_cpe.columns:
+                            df_pipeline_cpe['distancia entre postes'] = (
+                                df_pipeline_cpe['distancia entre postes'] / 2
+                            )
+
+                        for forn in FORNECEDORES:
+                            df_run_cpe = df_pipeline_cpe.copy()
+                            df_run_cpe['Fornecedor'] = forn
+                            for col in list(dict.fromkeys(num_ok + cat_ok + [feature_w_col])):
+                                if col not in df_run_cpe.columns:
+                                    df_run_cpe[col] = np.nan
+
+                            metricas_lote = ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']
+                            preds_c_all = prever_metricas_com_dependencia_w(df_run_cpe, modelos, metricas_lote, meta)
+                            for m in metricas_lote:
+                                if m in preds_c_all:
+                                    df_saida.loc[cpe_indices, f'CPE {TARGETS_MAP[m]} - {forn}'] = [
+                                        max(p, 0) if pd.notna(p) else np.nan for p in preds_c_all[m]
+                                    ]
+
+                        # Ajuste NBR nas predições CPE — idêntico ao ajuste do cenário base
+                        if tem_classe and 'Classificação viária' in df_pipeline_cpe.columns:
+                            req_m3_cpe = NBR5101['M3']['lmed']
+                            for forn in FORNECEDORES:
+                                cpe_pot_col = f'CPE {TARGETS_MAP["w"]} - {forn}'
+                                if cpe_pot_col not in df_saida.columns:
+                                    continue
+                                for idx_loc in cpe_indices:
+                                    cl = str(df_pipeline.loc[idx_loc, 'Classificação viária']).upper()
+                                    info_cpe = NBR5101.get(cl, {})
+                                    if not info_cpe:
+                                        continue
+                                    p_pot = df_saida.loc[idx_loc, cpe_pot_col]
+                                    if pd.isna(p_pot):
+                                        continue
+                                    if cl.startswith('M'):
+                                        fator_cpe = info_cpe.get('lmed', req_m3_cpe) / req_m3_cpe
+                                        df_saida.loc[idx_loc, cpe_pot_col] = p_pot * fator_cpe
+                                    else:
+                                        cpe_ilum_col = f'CPE {TARGETS_MAP["emed"]} - {forn}'
+                                        req_cpe = info_cpe.get('emed')
+                                        if req_cpe is None or cpe_ilum_col not in df_saida.columns:
+                                            continue
+                                        p_ilum = df_saida.loc[idx_loc, cpe_ilum_col]
+                                        if (pd.notna(p_ilum) and p_ilum > 0 and p_ilum < req_cpe):
+                                            df_saida.loc[idx_loc, cpe_pot_col] = p_pot * (req_cpe / p_ilum)
+
                 # Busca de Custo e Modelo no Banco de Dados para o Lote
                 if not banco_luminarias.empty:
                     for forn in FORNECEDORES:
@@ -1209,8 +1459,42 @@ with tab_lote:
                 st.session_state.df_export = df_export
 
                 st.markdown('### ✨ Resultados (Preview)')
-                st.dataframe(df_saida.head(10)) # Mostra preview compacto
-                
+                # Exibe preview sem as colunas CPE intermediárias (ficaria muito largo)
+                cols_preview = [c for c in df_saida.columns if not c.startswith('CPE ')]
+                st.dataframe(df_saida[cols_preview].head(10))
+
+                # ── Seção CPE visual — mesma lógica do modo individual ───────────────
+                if 'Correção de Ponto Escuro (CPE)' in df_saida.columns:
+                    df_cpe_vis = df_saida[df_saida['Correção de Ponto Escuro (CPE)'] == 'Sim']
+                    if not df_cpe_vis.empty:
+                        st.markdown('<p class="section-title">⚠️ Correção de Ponto Escuro (CPE)</p>', unsafe_allow_html=True)
+                        st.warning(
+                            f"**{len(df_cpe_vis)} instalação(ões)** com risco de ponto escuro detectado(s) "
+                            f"(distância entre postes ≥ 40m). "
+                            "Recomenda-se inserção de estrutura intermediária."
+                        )
+                        cpe_rows_display = []
+                        for _, row in df_cpe_vis.iterrows():
+                            dist_orig = pd.to_numeric(row.get(col_dist_lote, 0), errors='coerce') or 0
+                            entry = {
+                                'ID': row.get('ID', ''),
+                                'Logradouro': str(row.get('Logradouro', ''))[:35],
+                                'Classe': row.get('Classificação viária', ''),
+                                'Dist. Atual (m)': f"{dist_orig:.0f}",
+                                'Dist. CPE (m)': f"{dist_orig/2:.0f}",
+                            }
+                            for forn in FORNECEDORES:
+                                pot_orig = row.get(f'{TARGETS_MAP["w"]} - {forn}')
+                                pot_cpe  = row.get(f'CPE {TARGETS_MAP["w"]} - {forn}')
+                                entry[f'{forn[:8]} Orig (W)'] = f"{pot_orig:.0f}" if pd.notna(pot_orig) else '-'
+                                entry[f'{forn[:8]} CPE (W)']  = f"{pot_cpe:.0f}"  if pd.notna(pot_cpe)  else '-'
+                            cpe_rows_display.append(entry)
+                        st.dataframe(
+                            pd.DataFrame(cpe_rows_display),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
                 buffer_resultado = io.BytesIO()
                 with pd.ExcelWriter(buffer_resultado, engine='openpyxl') as writer:
                     df_export.to_excel(writer, index=False)
@@ -1327,6 +1611,21 @@ with tab_dash:
                     novas_cols.append('Economia Média (%)')
                 analise_via.columns = novas_cols
                 
+                # Mescla a média histórica de treinamento
+                medias_historicas = carregar_media_historica()
+                if not medias_historicas.empty:
+                    analise_via = analise_via.merge(
+                        medias_historicas.rename(columns={'Classe_Resumo': 'Classe'}),
+                        on='Classe', how='left'
+                    )
+                    # Reordena para ficar 'Média Histórica (W)' logo após 'Potência Média (W)'
+                    cols = list(analise_via.columns)
+                    if 'Média Histórica (W)' in cols:
+                        cols.remove('Média Histórica (W)')
+                        idx_pot = cols.index('Potência Média (W)')
+                        cols.insert(idx_pot + 1, 'Média Histórica (W)')
+                        analise_via = analise_via[cols]
+                
                 c1, c2 = st.columns([2, 1])
                 with c1:
                     fig_via = go.Figure()
@@ -1346,10 +1645,12 @@ with tab_dash:
                     st.plotly_chart(fig_pie, use_container_width=True)
 
                 formato = {'Potência Média (W)': '{:.1f} W'}
+                if 'Média Histórica (W)' in analise_via.columns:
+                    formato['Média Histórica (W)'] = '{:.1f} W'
                 if 'Economia Média (%)' in analise_via.columns:
                     formato['Economia Média (%)'] = '{:.1f} %'
                 
-                st.table(analise_via.style.format(formato))
+                st.dataframe(analise_via.style.format(formato, na_rep='-'), use_container_width=True, hide_index=True)
             else:
                 st.warning(f'Dados de potência para {forn_dash} não encontrados na simulação.')
         else:
