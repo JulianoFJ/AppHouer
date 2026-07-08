@@ -24,17 +24,17 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
-from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor, RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, r2_score, classification_report
 import joblib
 
 # ── Configurações ─────────────────────────────────────────────────────────────
-PASTA = r'c:\Users\julia\OneDrive\Área de Trabalho\Houer\ML - Simulação'
+PASTA = os.path.dirname(os.path.abspath(__file__))
 
 TARGETS_INFO = {
     'lmed': ('Luminância Média', 'cd/m²'),
@@ -164,6 +164,72 @@ def treinar_e_salvar(dataset_name, suffix=""):
             'type':              type(base_est).__name__,
             'features_numericas': num_feats,
         }
+
+    # ── Classificador CPE (binário: precisa inserir ponto?) ───────────────────
+    if 'tem_cpe' in df.columns:
+        print(f'\n[TREINO] CLASSIFICADOR CPE | features: geométricas + classe')
+        # Features: apenas geometria e classificação — sem Braço Novo (não disponível na previsão)
+        cat_cpe = [c for c in cat_ok if c != 'Braço Novo']
+        df_cpe = df.dropna(subset=num_ok + cat_cpe).copy()
+        X_cpe = df_cpe[num_ok + cat_cpe]
+        y_cpe = df_cpe['tem_cpe'].astype(int)
+        n_pos = int(y_cpe.sum())
+        print(f'  Amostras: {len(df_cpe)} | Positivos (CPE=1): {n_pos} ({n_pos/len(df_cpe)*100:.1f}%)')
+        if n_pos >= 5:
+            X_tr, X_te, y_tr, y_te = train_test_split(
+                X_cpe, y_cpe, test_size=0.2, random_state=42, stratify=y_cpe
+            )
+            clf_cpe = Pipeline([
+                ('prep', make_preprocessor(num_ok, cat_cpe)),
+                ('model', RandomForestClassifier(
+                    n_estimators=400, class_weight='balanced', random_state=42, n_jobs=-1
+                )),
+            ])
+            clf_cpe.fit(X_tr, y_tr)
+            y_pred_cpe = clf_cpe.predict(X_te)
+            print(classification_report(y_te, y_pred_cpe, target_names=['sem_cpe', 'com_cpe'], zero_division=0))
+            joblib.dump(clf_cpe, os.path.join(PASTA, f'modelo_cpe{suffix}.pkl'))
+            meta_geral['modelo_cpe'] = {
+                'features_numericas':   num_ok,
+                'features_categoricas': cat_cpe,
+                'type': 'RandomForestClassifier',
+            }
+            print(f'  [OK] modelo_cpe{suffix}.pkl salvo')
+        else:
+            print(f'  [AVISO] Poucos positivos ({n_pos}) — classificador CPE não treinado')
+
+    # ── Classificador Braço Novo (multiclasse: qual braço usar?) ──────────────
+    if 'Braço Novo' in df.columns:
+        print(f'\n[TREINO] CLASSIFICADOR BRAÇO NOVO | features: geométricas + classe')
+        # Remove Braço Novo das features — é o target aqui
+        cat_braco = [c for c in cat_ok if c != 'Braço Novo']
+        df_braco = df[df['Braço Novo'].notna()].dropna(subset=num_ok + cat_braco).copy()
+        X_braco = df_braco[num_ok + cat_braco]
+        y_braco = df_braco['Braço Novo'].astype(str)
+        print(f'  Amostras com troca de braço: {len(df_braco)} | Classes: {sorted(y_braco.unique())}')
+        if len(df_braco) >= 20:
+            X_tr, X_te, y_tr, y_te = train_test_split(
+                X_braco, y_braco, test_size=0.2, random_state=42, stratify=y_braco
+            )
+            clf_braco = Pipeline([
+                ('prep', make_preprocessor(num_ok, cat_braco)),
+                ('model', RandomForestClassifier(
+                    n_estimators=400, random_state=42, n_jobs=-1
+                )),
+            ])
+            clf_braco.fit(X_tr, y_tr)
+            y_pred_braco = clf_braco.predict(X_te)
+            print(classification_report(y_te, y_pred_braco, zero_division=0))
+            joblib.dump(clf_braco, os.path.join(PASTA, f'modelo_braco{suffix}.pkl'))
+            meta_geral['modelo_braco'] = {
+                'features_numericas':   num_ok,
+                'features_categoricas': cat_braco,
+                'classes':              sorted(y_braco.unique().tolist()),
+                'type': 'RandomForestClassifier',
+            }
+            print(f'  [OK] modelo_braco{suffix}.pkl salvo')
+        else:
+            print(f'  [AVISO] Poucas amostras ({len(df_braco)}) — classificador Braço não treinado')
 
     meta_path = os.path.join(PASTA, f'features{suffix}.json')
     with open(meta_path, 'w', encoding='utf-8') as f:

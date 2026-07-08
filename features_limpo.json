@@ -24,8 +24,8 @@
     "emin"
   ],
   "modelo_lmed": {
-    "r2": 0.2788,
-    "mae": 4.15,
+    "r2": 0.8889,
+    "mae": 3.26,
     "type": "RandomForestRegressor",
     "features_numericas": [
       "Faixas de Rodagem",
@@ -41,8 +41,8 @@
     ]
   },
   "modelo_uo": {
-    "r2": -1.8202,
-    "mae": 0.13,
+    "r2": 0.891,
+    "mae": 0.04,
     "type": "HistGradientBoostingRegressor",
     "features_numericas": [
       "Faixas de Rodagem",
@@ -58,8 +58,8 @@
     ]
   },
   "modelo_ul": {
-    "r2": -0.0511,
-    "mae": 1.48,
+    "r2": 0.2843,
+    "mae": 0.13,
     "type": "HistGradientBoostingRegressor",
     "features_numericas": [
       "Faixas de Rodagem",
@@ -75,8 +75,8 @@
     ]
   },
   "modelo_emed": {
-    "r2": 0.9008,
-    "mae": 1.1,
+    "r2": 0.8862,
+    "mae": 1.25,
     "type": "RandomForestRegressor",
     "features_numericas": [
       "Faixas de Rodagem",
@@ -93,8 +93,8 @@
     ]
   },
   "modelo_emin": {
-    "r2": 0.8205,
-    "mae": 1.14,
+    "r2": 0.7547,
+    "mae": 1.53,
     "type": "HistGradientBoostingRegressor",
     "features_numericas": [
       "Faixas de Rodagem",
@@ -111,8 +111,8 @@
     ]
   },
   "modelo_w": {
-    "r2": 0.8134,
-    "mae": 5.58,
+    "r2": 0.8176,
+    "mae": 6.28,
     "type": "HistGradientBoostingRegressor",
     "features_numericas": [
       "Faixas de Rodagem",
@@ -126,5 +126,55 @@
       "distancia entre postes",
       "distancia Poste a via"
     ]
+  },
+  "modelo_cpe": {
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via"
+    ],
+    "features_categoricas": [
+      "Classificação viária",
+      "Tipo de estrutura",
+      "posteacao",
+      "Fornecedor"
+    ],
+    "type": "RandomForestClassifier"
+  },
+  "modelo_braco": {
+    "features_numericas": [
+      "Faixas de Rodagem",
+      "Largura Via 1",
+      "Largura Via 2",
+      "Largura Passeio 1",
+      "largura Passeio 2",
+      "largura Canteiro Central",
+      "altura da luminaria",
+      "projecao do braço",
+      "distancia entre postes",
+      "distancia Poste a via"
+    ],
+    "features_categoricas": [
+      "Classificação viária",
+      "Tipo de estrutura",
+      "posteacao",
+      "Fornecedor"
+    ],
+    "classes": [
+      "Curto I",
+      "Curto II",
+      "Longo I",
+      "Longo II",
+      "Médio I",
+      "Médio II"
+    ],
+    "type": "RandomForestClassifier"
   }
 }

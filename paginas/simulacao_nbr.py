@@ -22,13 +22,8 @@ def get_google_maps_api_key():
 
 GOOGLE_MAPS_API_KEY = get_google_maps_api_key()
 
-# ── Configuração da página ────────────────────────────────────────────────────
-st.set_page_config(
-    page_title='Previsão de Iluminação — Houer',
-    page_icon='💡',
-    layout='wide',
-    initial_sidebar_state='expanded',
-)
+# ── Página renderizada via app.py (hub) ───────────────────────────────────────
+# st.set_page_config é chamado pelo entry point `app.py`. Não duplicar aqui.
 
 # Inicializa estado para Simulação em Lote
 if 'df_lote' not in st.session_state:
@@ -140,7 +135,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Caminhos ──────────────────────────────────────────────────────────────────
-PASTA = os.path.dirname(os.path.abspath(__file__))
+# Esta página vive em `paginas/`, mas os .pkl / .csv / .json originais estão
+# na raiz do projeto (junto com app.py). Por isso subimos um nível.
+PASTA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FEATURES_PATH = os.path.join(PASTA, 'features.json')
 
 # ── Configurações ─────────────────────────────────────────────────────────────
@@ -158,6 +155,21 @@ TARGETS_MAP = {
 UNITS_MAP = {
     'lmed': 'cd/m²', 'uo': '', 'ul': '', 'emed': 'lux', 'emin': 'lux', 'w': 'W'
 }
+
+# Projeção física de cada classificação de braço (metros) — tabela padrão Houer
+BRACOS_PROJECAO = {
+    'Curto I':  1.2,
+    'Curto II': 1.4,
+    'Médio I':  1.8,
+    'Médio II': 2.4,
+    'Longo I':  2.8,
+    'Longo II': 3.5,
+}
+BRACOS_ORDENADOS = sorted(BRACOS_PROJECAO.items(), key=lambda x: x[1])
+
+def projecao_para_braco(proj_m: float) -> str:
+    """Retorna a classificação de braço mais próxima da projeção em metros."""
+    return min(BRACOS_PROJECAO, key=lambda b: abs(BRACOS_PROJECAO[b] - float(proj_m)))
 
 # ── Template de Exportação (Colunas D a DM das planilhas originais) ─────────────
 TEMPLATE_COLUMNS = [
@@ -285,6 +297,19 @@ def carregar_modelos(suffix=""):
             modelos[key] = joblib.load(path)
     return modelos, meta
 
+@st.cache_resource
+def carregar_classificadores(suffix=""):
+    """Carrega modelo_cpe e modelo_braco se existirem."""
+    clf_cpe   = None
+    clf_braco = None
+    path_cpe   = os.path.join(PASTA, f'modelo_cpe{suffix}.pkl')
+    path_braco = os.path.join(PASTA, f'modelo_braco{suffix}.pkl')
+    if os.path.exists(path_cpe):
+        clf_cpe = joblib.load(path_cpe)
+    if os.path.exists(path_braco):
+        clf_braco = joblib.load(path_braco)
+    return clf_cpe, clf_braco
+
 def prever_metricas_com_dependencia_w(df_base: pd.DataFrame, modelos: dict, metricas: list, meta: dict):
     """Prevê métricas respeitando dependência de W (emed/emin treinados com coluna de potência)."""
     preds = {}
@@ -396,6 +421,105 @@ def carregar_media_historica():
 
 medias_historicas = carregar_media_historica()
 
+@st.cache_data
+def carregar_regras_braco_novo():
+    """Aprende padrão de Braço Novo com base histórica (classe, largura e altura)."""
+    caminho = os.path.join(PASTA, 'dataset.csv')
+    vazio = pd.DataFrame(columns=['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R', 'Braco_Recomendado'])
+    vazio_classe = pd.DataFrame(columns=['Classe_Prefixo', 'Braco_Recomendado'])
+    if not os.path.exists(caminho):
+        return vazio, vazio_classe
+    try:
+        df = pd.read_csv(caminho)
+        cols_req = ['Classificação viária', 'Largura Via 1', 'altura da luminaria', 'distancia entre postes', 'Braço Novo']
+        if any(c not in df.columns for c in cols_req):
+            return vazio, vazio_classe
+        d = df[cols_req].copy()
+        d = d.dropna(subset=['Classificação viária', 'Largura Via 1', 'altura da luminaria', 'Braço Novo'])
+        if d.empty:
+            return vazio, vazio_classe
+        d['Classe_Prefixo'] = d['Classificação viária'].astype(str).str.upper().str[:1]
+        d = d[d['Classe_Prefixo'].isin(['M', 'C', 'P'])]
+        d['Largura_R'] = pd.to_numeric(d['Largura Via 1'], errors='coerce').round(1)
+        d['Altura_R'] = pd.to_numeric(d['altura da luminaria'], errors='coerce').round(1)
+        d['Dist_R'] = pd.to_numeric(d['distancia entre postes'], errors='coerce').round(1)
+        d = d.dropna(subset=['Largura_R', 'Altura_R', 'Dist_R'])
+        if d.empty:
+            return vazio, vazio_classe
+        agg = (d.groupby(['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R', 'Braço Novo'])
+                 .size().reset_index(name='n')
+                 .sort_values('n', ascending=False))
+        regras_finas = (agg.drop_duplicates(['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R'])
+                          .rename(columns={'Braço Novo': 'Braco_Recomendado'})
+                          [['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R', 'Braco_Recomendado']])
+        agg_classe = (d.groupby(['Classe_Prefixo', 'Braço Novo'])
+                        .size().reset_index(name='n')
+                        .sort_values('n', ascending=False))
+        regras_classe = (agg_classe.drop_duplicates(['Classe_Prefixo'])
+                           .rename(columns={'Braço Novo': 'Braco_Recomendado'})
+                           [['Classe_Prefixo', 'Braco_Recomendado']])
+        return regras_finas, regras_classe
+    except Exception:
+        return vazio, vazio_classe
+
+def sugerir_braco_novo(subclasse, largura_via1, altura_lum, dist_postes,
+                       regras_finas, regras_classe, clf_braco=None,
+                       tipo_estrutura='Braço', posteacao='Unilateral',
+                       dist_poste_via=0.5, faixas=2, largura_via2=0.0,
+                       passeio1=0.0, passeio2=0.0, canteiro=0.0):
+    """Sugere Braço Novo: ML (se disponível) → vizinhança histórica → fallback por classe."""
+
+    # 1) Classificador ML
+    if clf_braco is not None:
+        try:
+            row = pd.DataFrame([{
+                'Faixas de Rodagem':      faixas,
+                'Largura Via 1':          largura_via1,
+                'Largura Via 2':          largura_via2,
+                'Largura Passeio 1':      passeio1,
+                'largura Passeio 2':      passeio2,
+                'largura Canteiro Central': canteiro,
+                'altura da luminaria':    altura_lum,
+                'projecao do braço':      1.5,   # valor neutro — não afeta classificação
+                'distancia entre postes': dist_postes,
+                'distancia Poste a via':  dist_poste_via,
+                'Classificação viária':   subclasse,
+                'Tipo de estrutura':      tipo_estrutura,
+                'posteacao':              posteacao,
+                'Fornecedor':             'LEDSTAR',  # neutro — modelo generaliza
+            }])
+            return clf_braco.predict(row)[0], 'ml'
+        except Exception:
+            pass
+
+    # 2) Vizinhança histórica
+    if not regras_finas.empty:
+        pref = str(subclasse).upper()[:1]
+        larg = round(float(largura_via1), 1)
+        alt  = round(float(altura_lum), 1)
+        dist = round(float(dist_postes), 1)
+        cand = regras_finas[regras_finas['Classe_Prefixo'] == pref].copy()
+        if not cand.empty:
+            cand['dist'] = (
+                (cand['Largura_R'] - larg).abs()
+                + (cand['Altura_R'] - alt).abs()
+                + 0.25 * (cand['Dist_R'] - dist).abs()
+            )
+            best = cand.sort_values('dist').iloc[0]
+            if best['dist'] <= 2.5:
+                return best['Braco_Recomendado'], 'historico'
+
+    # 3) Fallback por classe
+    if not regras_classe.empty:
+        pref = str(subclasse).upper()[:1]
+        cand_c = regras_classe[regras_classe['Classe_Prefixo'] == pref]
+        if not cand_c.empty:
+            return cand_c.iloc[0]['Braco_Recomendado'], 'historico'
+
+    return None, None
+
+regras_braco_finas, regras_braco_classe = carregar_regras_braco_novo()
+
 
 # ── Header ────────────────────────────────────────────────────────────────────
 col_l, col_r = st.columns([1, 3])
@@ -450,6 +574,7 @@ with st.sidebar:
     sufixo_modelo = "_limpo" if modo_dados == 'Otimizada (Sem outliers)' else ""
     
     modelos, meta = carregar_modelos(sufixo_modelo)
+    clf_cpe, clf_braco = carregar_classificadores(sufixo_modelo)
     num_ok = meta.get('features_numericas', [])
     cat_ok = meta.get('features_categoricas', [])
     feature_w_col = meta.get('feature_w_col', 'Potencia simulada - IP Principal (W)')
@@ -489,7 +614,9 @@ with st.sidebar:
     st.markdown('### 🔩 Configurações')
     tipo_estrutura = st.selectbox('Tipo de Estrutura', ['Braço', 'Suporte'])
     posteacao      = st.selectbox('Posteação', ['Unilateral', 'Canteiro central', 'Bilateral alternada', 'Bilateral frontal'])
-    braco_novo     = st.selectbox('Braço Novo', ['Longo II', 'Longo I', 'Médio I', 'Médio II', 'Curto II', 'Curto I'])
+    # Braço atual derivado automaticamente da projeção informada
+    braco_novo = projecao_para_braco(projecao_braco)
+    st.caption(f"📏 Braço atual identificado: **{braco_novo}** ({projecao_braco:.2f}m) — sugestão de troca gerada pelo modelo ML de geometria histórica.")
 
     st.markdown('---')
     st.markdown('### 📍 Localização do Projeto')
@@ -717,11 +844,11 @@ def gerar_pdf_lote(df):
 def gerar_template_lote():
     cols = [
         'ID', 'Classificacao (M/C/P)', 'Altura de Instalação', 'distancia entre poste',
-        'Largura da Via 1', 'projecao do braço', 'Braço Novo', 'Posteação', 'Potencia Atual (W)'
+        'Largura da Via 1', 'projecao do braço', 'Posteação', 'Potencia Atual (W)'
     ]
     df_temp = pd.DataFrame(columns=cols)
     # Linha de exemplo
-    df_temp.loc[0] = [1, 'M3', 10.0, 35.0, 7.0, 1.5, 'Longo II', 'Unilateral', 250.0]
+    df_temp.loc[0] = [1, 'M3', 10.0, 35.0, 7.0, 1.5, 'Unilateral', 250.0]
     
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -752,13 +879,17 @@ def analisar_melhorias(forn, modelos, metricas_ativas, info_nbr, config_base, nu
             sugestoes.append(f"📐 **Alteração Estrutural**: Aumentar a altura para **{c['altura da luminaria']:.1f}m**")
             break
             
-    # 2. Tentar aumentar projeção
-    for p_add in [0.5, 1.0]:
+    # 2. Tentar braços discretos em ordem crescente de projeção
+    proj_atual = config_base.get('projecao do braço', 1.8)
+    for arm_name, arm_proj in BRACOS_ORDENADOS:
+        if arm_proj <= proj_atual:
+            continue  # só testa braços maiores que o atual
         c = config_base.copy()
-        c['projecao do braço'] += p_add
-        if 'projecao do brao' in c: c['projecao do brao'] += p_add
+        c['Braço Novo'] = arm_name
+        c['projecao do braço'] = arm_proj
+        if 'projecao do brao' in c: c['projecao do brao'] = arm_proj
         if verifica_atende(c):
-            sugestoes.append(f"🏗️ **Ajuste de Braço**: Aumentar a projeção para **{c['projecao do braço']:.1f}m**")
+            sugestoes.append(f"🏗️ **Ajuste de Braço**: Trocar para **{arm_name}** (projeção {arm_proj:.1f}m)")
             break
 
     # 3. Tentar reduzir distância
@@ -851,6 +982,118 @@ def formatar_resultado_template(df_saida):
             rows.append(new_row)
             
     return pd.DataFrame(rows, columns=TEMPLATE_COLUMNS)
+
+
+def formatar_tabela_resultado(df_saida):
+    """
+    Formata o resultado no estilo da aba 'tabela dinamica' do BRDE04:
+    uma linha por (ponto × fornecedor), com as colunas operacionais principais.
+    """
+    col_pot_w = TARGETS_MAP['w']   # 'Potência (W)'
+    rows = []
+    for _, row in df_saida.iterrows():
+        for forn in FORNECEDORES:
+            rows.append({
+                'ID':                                    row.get('ID', ''),
+                'Logradouro':                            row.get('Logradouro', ''),
+                'latitude':                              row.get('latitude', np.nan),
+                'longitude':                             row.get('longitude', np.nan),
+                'Classificação viária':                  row.get('Classificação viária', ''),
+                'Potência Atual (W)':                    row.get('Potencia da lâmpada', np.nan),
+                'Fornecedor':                            forn,
+                'Código de Luminária':                   row.get(f'Modelo Sugerido - {forn}', ''),
+                'Potência Proposta (W)':                 row.get(f'{col_pot_w} - {forn}', np.nan),
+                'Braço Antigo':                          row.get('Braço Antigo', row.get('Braço Atual', '')),
+                'Braço Novo':                            row.get('Sugestão Braço Novo', ''),
+                'Tipo de CPE':                           row.get('Correção de Ponto Escuro (CPE)', 'Não'),
+                'Observação CPE':                        row.get('Observação CPE  (Reduçao entre postes e/ou Tipo de Posteação)', ''),
+                'Qtd. Pontos IP Veic':                   row.get('Quantidade de pontos inspecionados IP Veic', np.nan),
+                'Qtd. Pontos IP Sec':                    row.get('Quantidade de pontos inspecionados IP Sec', np.nan),
+                'Aumento de Pontos Proposto (Veículos)': row.get('Quantidade de pontos adicionados para via de veículo', 0),
+                'Status NBR':                            row.get(f'Status NBR - {forn}', ''),
+                'Economia (W)':                          row.get(f'Economia (W) - {forn}', np.nan),
+                'Redução (%)':                           row.get(f'Reducao (%) - {forn}', np.nan),
+            })
+    return pd.DataFrame(rows)
+
+
+def formatar_tabela_dinamica(df_saida):
+    """
+    Gera aba 'Tabela Dinâmica' no estilo do BRDE04:
+    agrupa por (Potência Atual, Classe de Iluminação, Fornecedor, Código da Luminária,
+    Potência Proposta, Braço Antigo, Braço Novo, Tipo de CPE,
+    Qtd IP Veic, Qtd IP Sec, Aumento Veículos, Aumento 2º Nível)
+    e conta o número de logradouros por combinação.
+    """
+    col_pot_w = TARGETS_MAP['w']
+    rows = []
+    for _, row in df_saida.iterrows():
+        # pd.isna necessário pois np.nan é truthy — 'or' simples não funciona com NaN
+        _ba  = row.get('Braço Antigo')
+        _ba2 = row.get('Braço Atual')
+        braco_antigo = (str(_ba).strip()  if pd.notna(_ba)  and str(_ba).strip()  else
+                        str(_ba2).strip() if pd.notna(_ba2) and str(_ba2).strip() else '')
+        _bn = row.get('Sugestão Braço Novo')
+        braco_novo_raw = str(_bn).strip() if pd.notna(_bn) else ''
+        braco_novo = braco_novo_raw if braco_novo_raw and braco_novo_raw != braco_antigo else ''
+
+        aum_veic = row.get('Quantidade de pontos adicionados para via de veículo', '')
+        aum_sec  = row.get('Quantidade de pontos adicionados para via de pedestres', '')
+        aum_veic = '' if pd.isna(aum_veic) or aum_veic == 0 else aum_veic
+        aum_sec  = '' if pd.isna(aum_sec)  or aum_sec  == 0 else aum_sec
+
+        cpe = str(row.get('Correção de Ponto Escuro (CPE)', '') or '')
+        cpe = '' if cpe.lower() in ('não', 'nao', 'no', '', 'nan', 'none') else cpe
+
+        pot_atual_raw = row.get('Potencia da lâmpada', np.nan)
+        pot_atual = int(round(pot_atual_raw)) if pd.notna(pot_atual_raw) and pot_atual_raw >= 1 else ''
+
+        qtd_veic = row.get('Quantidade de pontos inspecionados IP Veic', 0)
+        qtd_sec  = row.get('Quantidade de pontos inspecionados IP Sec', 0)
+        qtd_veic = 0 if pd.isna(qtd_veic) else int(qtd_veic)
+        qtd_sec  = 0 if pd.isna(qtd_sec)  else int(qtd_sec)
+
+        for forn in FORNECEDORES:
+            pot_prop_raw = row.get(f'{col_pot_w} - {forn}', np.nan)
+            pot_prop = int(round(pot_prop_raw)) if pd.notna(pot_prop_raw) else ''
+            codigo = str(row.get(f'Modelo Sugerido - {forn}', '') or '').strip()
+            rows.append({
+                'Potência Atual':                                pot_atual,
+                'Classe de Iluminação':                          row.get('Classificação viária', ''),
+                'Fornecedor':                                    forn,
+                'Código da Luminária':                           codigo,
+                'Potência Proposta':                             pot_prop,
+                'Braço Antigo':                                  braco_antigo,
+                'Braço Novo':                                    braco_novo,
+                'Tipo de CPE':                                   cpe,
+                'Quantidade de pontos inspecionados IP Veic':    qtd_veic,
+                'Quantidade de pontos inspecionados IP Sec':     qtd_sec,
+                'Aumento de pontos proposto (via de veículos)':  aum_veic,
+                'Aumento de pontos proposto (segundo nível)':    aum_sec,
+            })
+
+    df_flat = pd.DataFrame(rows)
+    group_cols = [
+        'Potência Atual', 'Classe de Iluminação', 'Fornecedor', 'Código da Luminária',
+        'Potência Proposta', 'Braço Antigo', 'Braço Novo', 'Tipo de CPE',
+        'Quantidade de pontos inspecionados IP Veic',
+        'Quantidade de pontos inspecionados IP Sec',
+        'Aumento de pontos proposto (via de veículos)',
+        'Aumento de pontos proposto (segundo nível)',
+    ]
+    df_flat[group_cols] = df_flat[group_cols].fillna('').astype(str)
+    df_grouped = (
+        df_flat.groupby(group_cols, sort=True)
+               .size()
+               .reset_index(name='Sum of Número de logradouros')
+    )
+    # Converte de volta colunas numéricas que foram stringificadas
+    for col in ['Potência Atual', 'Potência Proposta',
+                'Quantidade de pontos inspecionados IP Veic',
+                'Quantidade de pontos inspecionados IP Sec']:
+        df_grouped[col] = pd.to_numeric(df_grouped[col], errors='coerce')
+    return df_grouped
+
 
 # Métricas ativas baseadas na subclasse NBR 5101
 metricas_ativas = NBR5101.get(subclasse, {}).get('metricas', ['emed', 'w'])
@@ -959,6 +1202,37 @@ with tab_individual:
             sugestoes_por_forn[forn] = analisar_melhorias(
                 forn, modelos, metricas_ativas, info_nbr, config_dicts[forn], num_ok, cat_ok)
 
+    # ── Sugestão ML de braço (individual) ────────────────────────────────────
+    BRACO_ML_CONF_MIN_IND = 0.50  # só exibe sugestão se confiança >= 50%
+    braco_ml_sugestao = None
+    braco_ml_prob = None
+    if clf_braco is not None:
+        try:
+            row_braco_ind = pd.DataFrame([{
+                'Faixas de Rodagem':        faixas,
+                'Largura Via 1':            largura_via1,
+                'Largura Via 2':            largura_via2,
+                'Largura Passeio 1':        largura_passeio1,
+                'largura Passeio 2':        largura_passeio2,
+                'largura Canteiro Central': canteiro,
+                'altura da luminaria':      altura_lum,
+                'projecao do braço':        projecao_braco,
+                'distancia entre postes':   dist_postes,
+                'distancia Poste a via':    dist_poste_via,
+                'Classificação viária':     subclasse,
+                'Tipo de estrutura':        tipo_estrutura,
+                'posteacao':                posteacao,
+                'Fornecedor':               'LEDSTAR',
+            }])
+            _pred = clf_braco.predict(row_braco_ind)[0]
+            _probs = clf_braco.predict_proba(row_braco_ind)[0]
+            _prob = float(_probs[list(clf_braco.classes_).index(_pred)])
+            if _prob >= BRACO_ML_CONF_MIN_IND:
+                braco_ml_sugestao = _pred
+                braco_ml_prob = _prob
+        except Exception:
+            pass
+
     # Exibe os Cards Dinâmicos
     st.markdown('<p class="section-title">📊 Resultados por Fornecedor</p>', unsafe_allow_html=True)
     cols = st.columns(3)
@@ -1003,10 +1277,32 @@ with tab_individual:
             html_content += "</div>"
             st.markdown(html_content, unsafe_allow_html=True)
     
+    # ── Sugestão ML de Braço ─────────────────────────────────────────────────
+    if braco_ml_sugestao is not None:
+        proj_ml = BRACOS_PROJECAO.get(braco_ml_sugestao, None)
+        proj_atual_str = f"{projecao_braco:.2f}m"
+        if str(braco_ml_sugestao) != str(braco_novo):
+            cor_badge = '#f59e0b'
+            icone = '🔄'
+            msg = f"O modelo ML recomenda **{braco_ml_sugestao}** ({proj_ml:.1f}m) em vez do atual **{braco_novo}** ({proj_atual_str}) — baseado no padrão histórico desta geometria."
+        else:
+            cor_badge = '#22c55e'
+            icone = '✔'
+            msg = f"O modelo ML confirma o braço atual **{braco_novo}** ({proj_atual_str}) como adequado para esta geometria."
+        conf_str = f"{braco_ml_prob*100:.0f}%" if braco_ml_prob is not None else "—"
+        st.markdown(
+            f'<div style="background:rgba(18,25,43,0.7); border:1px solid #1f2937; border-left:4px solid {cor_badge}; '
+            f'border-radius:12px; padding:14px 18px; margin:12px 0;">'
+            f'<span style="font-size:0.8rem; font-weight:700; color:{cor_badge}; text-transform:uppercase; letter-spacing:.05em;">'
+            f'{icone} Braço — Recomendação ML</span>'
+            f'<div style="font-size:0.9rem; color:#e2e8f0; margin-top:6px;">{msg}</div>'
+            f'<div style="font-size:0.75rem; color:#64748b; margin-top:4px;">Confiança do modelo: {conf_str}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
     # ── Detecção Proativa de Ponto Escuro (CPE) ──────────────────────────────
-    # Aciona quando: distância ≥ 40m OU potência prevista > 40% acima da média histórica.
-    # Calcula cenário com poste intermediário (distância/2) e mostra comparativo.
-    DIST_CPE_MIN = 40.0
+    DIST_CPE_MIN = 45.0
     POT_DESVIO_FATOR = 1.40
 
     pot_previstas = [resultados['w'].get(f) for f in FORNECEDORES if 'w' in resultados and resultados['w'].get(f) is not None]
@@ -1020,8 +1316,38 @@ with tab_individual:
         media_hist_w is not None and pot_media_prev is not None
         and pot_media_prev > media_hist_w * POT_DESVIO_FATOR
     )
+    cpe_acionado = cpe_por_distancia and (cpe_por_desvio or media_hist_w is None)
 
-    if 'w' in metricas_ativas and (cpe_por_distancia or cpe_por_desvio):
+    # Classificador ML de CPE — sinal adicional ao conjunto de regras
+    cpe_ml_pred = None
+    cpe_ml_prob = None
+    if clf_cpe is not None:
+        try:
+            row_cpe = pd.DataFrame([{
+                'Faixas de Rodagem':        faixas,
+                'Largura Via 1':            largura_via1,
+                'Largura Via 2':            largura_via2,
+                'Largura Passeio 1':        largura_passeio1,
+                'largura Passeio 2':        largura_passeio2,
+                'largura Canteiro Central': canteiro,
+                'altura da luminaria':      altura_lum,
+                'projecao do braço':        projecao_braco,
+                'distancia entre postes':   dist_postes,
+                'distancia Poste a via':    dist_poste_via,
+                'Classificação viária':     subclasse,
+                'Tipo de estrutura':        tipo_estrutura,
+                'posteacao':                posteacao,
+                'Fornecedor':               'LEDSTAR',
+            }])
+            cpe_ml_pred = int(clf_cpe.predict(row_cpe)[0])
+            cpe_ml_prob = float(clf_cpe.predict_proba(row_cpe)[0][1])
+        except Exception:
+            pass
+
+    # CPE acionado se as regras OR o modelo ML apontarem risco
+    cpe_acionado = cpe_acionado or (cpe_ml_pred == 1)
+
+    if 'w' in metricas_ativas and cpe_acionado:
         dist_cpe = dist_postes / 2
         resultados_cpe = {m: {} for m in metricas_ativas}
 
@@ -1050,11 +1376,24 @@ with tab_individual:
             motivo_parts.append(f"distância de **{dist_postes:.0f}m** entre postes (limite recomendado: {DIST_CPE_MIN:.0f}m)")
         if cpe_por_desvio:
             motivo_parts.append(f"potência prevista **{pot_media_prev:.0f}W** acima da média histórica **{media_hist_w:.0f}W** (+{((pot_media_prev/media_hist_w)-1)*100:.0f}%)")
+        if media_hist_w is None and not cpe_por_distancia:
+            motivo_parts.append("classe sem média histórica disponível para validação de desvio")
+        if cpe_ml_pred == 1 and not cpe_por_distancia and not cpe_por_desvio:
+            motivo_parts.append(f"modelo ML detectou padrão geométrico de risco (probabilidade {cpe_ml_prob*100:.0f}%)")
+
+        sinal_ml = ""
+        if cpe_ml_prob is not None:
+            cor_ml = '#22c55e' if cpe_ml_pred == 0 else '#f59e0b'
+            sinal_ml = (
+                f'\n\n🤖 **Classificador ML:** probabilidade de CPE = **{cpe_ml_prob*100:.0f}%** '
+                f'<span style="color:{cor_ml};">{"⚠ Risco" if cpe_ml_pred == 1 else "✔ Baixo risco"}</span>'
+            )
 
         st.markdown('<p class="section-title">⚠️ Correção de Ponto Escuro (CPE)</p>', unsafe_allow_html=True)
         st.warning(
             "**Risco de ponto escuro detectado** — " + " e ".join(motivo_parts) + ".\n\n"
             f"Cenário proposto: inserção de estrutura intermediária reduz a distância de **{dist_postes:.0f}m → {dist_cpe:.0f}m**."
+            + sinal_ml
         )
 
         cpe_cols = st.columns(3)
@@ -1180,12 +1519,15 @@ with tab_lote:
     
     # Colunas necessárias para o modelo + rastreabilidade (em ordem do template)
     cols_template = [
-        'ID', 'Padrão', 'Logradouro', 'latitude', 'longitude', 
+        'ID', 'Padrão', 'Logradouro', 'latitude', 'longitude',
         'Classificação viária', 'Tipo de lâmpada', 'Potencia da lâmpada',
         'Faixas de Rodagem', 'Largura Passeio 1', 'Largura Via 1', 'Largura Via 2',
         'largura Passeio 2', 'largura Canteiro Central', 'posteacao', 'Tipo de estrutura',
         'distancia entre postes', 'altura da luminaria', 'qtd de Lampadas IP Princ',
-        'distancia Poste a via', 'projecao do braço', 'Altura de Instalação', 'Braço Novo'
+        'distancia Poste a via', 'projecao do braço', 'Altura de Instalação',
+        'Braço Antigo',                    # referência — tipo de braço atual instalado
+        'Quantidade de pontos inspecionados IP Veic',
+        'Quantidade de pontos inspecionados IP Sec',
     ]
     
     df_template = pd.DataFrame(columns=cols_template)
@@ -1213,7 +1555,9 @@ with tab_lote:
         'distancia Poste a via': 0.5,
         'projecao do braço': 1.5,
         'Altura de Instalação': 10.0,
-        'Braço Novo': 'Longo II'
+        'Braço Antigo': 'Médio II',
+        'Quantidade de pontos inspecionados IP Veic': 2,
+        'Quantidade de pontos inspecionados IP Sec': 0,
     }
     df_template = pd.concat([df_template, pd.DataFrame([exemplo])], ignore_index=True)
     
@@ -1265,7 +1609,124 @@ with tab_lote:
                 # Procura por qualquer variação de 'Classificacao'
                 col_classe = next((c for c in df_pipeline.columns if 'Classificação viária' == c), None)
                 tem_classe = col_classe is not None
-                
+
+                metricas_lote = ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']
+
+                # ── Sugestão de Braço via Classificador ML ───────────────────────
+                # Opção A: clf_braco aprende o padrão histórico de qual braço é
+                # usado para cada geometria, independentemente da conformidade NBR.
+                # Isso resolve o bloqueio das classes M (lmed R²<0.5) e o efeito
+                # quase nulo da projeção sobre emed nas classes C/P.
+                # Fallback: conformidade NBR (preservado para quando clf_braco=None).
+
+                # 1. Identifica braço atual por projeção
+                proj_series = pd.to_numeric(
+                    df_pipeline.get('projecao do braço', pd.Series([1.8]*len(df_pipeline))),
+                    errors='coerce'
+                ).fillna(1.8).values
+                bracos_atuais = [projecao_para_braco(p) for p in proj_series]
+
+                classes_s = (
+                    df_pipeline['Classificação viária'].values
+                    if 'Classificação viária' in df_pipeline.columns
+                    else [''] * len(df_pipeline)
+                )
+
+                bracos_pred = []
+
+                BRACO_ML_CONF_MIN = 0.50  # só sugere troca se a confiança do modelo for >= 50%
+
+                if clf_braco is not None:
+                    # 2a. Predição vetorizada pelo classificador ML de braço
+                    rows_ml = []
+                    for i in range(len(df_pipeline)):
+                        r = df_pipeline.iloc[i]
+                        rows_ml.append({
+                            'Faixas de Rodagem':        r.get('Faixas de Rodagem', 2),
+                            'Largura Via 1':            r.get('Largura Via 1', 7),
+                            'Largura Via 2':            r.get('Largura Via 2', 0),
+                            'Largura Passeio 1':        r.get('Largura Passeio 1', 2),
+                            'largura Passeio 2':        r.get('largura Passeio 2', 2),
+                            'largura Canteiro Central': r.get('largura Canteiro Central', 0),
+                            'altura da luminaria':      r.get('altura da luminaria', 9),
+                            'projecao do braço':        r.get('projecao do braço', 1.5),
+                            'distancia entre postes':   r.get('distancia entre postes', 35),
+                            'distancia Poste a via':    r.get('distancia Poste a via', 0.5),
+                            'Classificação viária':     r.get('Classificação viária', 'M3'),
+                            'Tipo de estrutura':        r.get('Tipo de estrutura', 'Braço'),
+                            'posteacao':                r.get('posteacao', 'Unilateral'),
+                            'Fornecedor':               'LEDSTAR',
+                        })
+                    df_ml_input = pd.DataFrame(rows_ml)
+                    try:
+                        ml_preds = clf_braco.predict(df_ml_input)
+                        ml_probs = clf_braco.predict_proba(df_ml_input).max(axis=1)
+                        for ml_pred, ml_prob, atual in zip(ml_preds, ml_probs, bracos_atuais):
+                            if str(ml_pred) != str(atual) and ml_prob >= BRACO_ML_CONF_MIN:
+                                bracos_pred.append(ml_pred)
+                            else:
+                                bracos_pred.append(None)
+                    except Exception:
+                        bracos_pred = [None] * len(df_pipeline)
+
+                else:
+                    # 2b. Fallback: conformidade NBR (funciona apenas para C/P com emed confiável)
+                    arm_preds_lote = {}
+                    for arm_name, arm_proj in BRACOS_ORDENADOS:
+                        df_arm = df_pipeline.copy()
+                        df_arm['Braço Novo'] = arm_name
+                        df_arm['projecao do braço'] = arm_proj
+                        arm_preds_lote[arm_name] = {}
+                        for forn in FORNECEDORES:
+                            df_ra = df_arm.copy()
+                            df_ra['Fornecedor'] = forn
+                            for col in list(dict.fromkeys(num_ok + cat_ok + [feature_w_col])):
+                                if col not in df_ra.columns:
+                                    df_ra[col] = np.nan
+                            arm_preds_lote[arm_name][forn] = prever_metricas_com_dependencia_w(
+                                df_ra, modelos, metricas_lote, meta
+                            )
+
+                    def arm_atende_linha(arm_name, i, classe_i):
+                        info_i = NBR5101.get(str(classe_i).upper(), {})
+                        for m in info_i.get('metricas', []):
+                            req = info_i.get(m)
+                            if m == 'w' or req is None or m not in metricas_confiaveis or m not in modelos:
+                                continue
+                            for forn in FORNECEDORES:
+                                arr = arm_preds_lote.get(arm_name, {}).get(forn, {}).get(m, np.array([]))
+                                val = float(arr[i]) if i < len(arr) else np.nan
+                                if pd.notna(val) and val < req:
+                                    return False
+                        return True
+
+                    for i in range(len(df_pipeline)):
+                        cl_i   = classes_s[i]
+                        atual  = bracos_atuais[i]
+                        info_i = NBR5101.get(str(cl_i).upper(), {})
+                        tem_req = any(
+                            info_i.get(m) is not None and m != 'w'
+                            and m in metricas_confiaveis and m in modelos
+                            for m in info_i.get('metricas', [])
+                        )
+                        if not tem_req or arm_atende_linha(atual, i, cl_i):
+                            bracos_pred.append(None)
+                        else:
+                            rec = None
+                            for arm_name, _ in BRACOS_ORDENADOS:
+                                if arm_name == atual:
+                                    continue
+                                if arm_atende_linha(arm_name, i, cl_i):
+                                    rec = arm_name
+                                    break
+                            bracos_pred.append(rec)
+
+                # 3. Injeta braço final na pipeline (atual ou recomendado)
+                bracos_final = [rec if rec else atual for rec, atual in zip(bracos_pred, bracos_atuais)]
+                df_pipeline['Braço Novo'] = bracos_final
+                df_saida['Braço Atual']         = bracos_atuais
+                df_saida['Sugestão Braço Novo'] = [rec or '' for rec in bracos_pred]
+
                 for forn in FORNECEDORES:
                     df_run = df_pipeline.copy()
                     df_run['Fornecedor'] = forn
@@ -1273,7 +1734,6 @@ with tab_lote:
                         if col not in df_run.columns:
                             df_run[col] = np.nan
 
-                    metricas_lote = ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']
                     preds_all = prever_metricas_com_dependencia_w(df_run, modelos, metricas_lote, meta)
 
                     # Filtro dinâmico por linha baseada na classificação
@@ -1361,8 +1821,12 @@ with tab_lote:
                             status_list.append('✔ Atende' if atende_linha else '✘ Não Atende')
                         df_saida[f'Status NBR - {forn}'] = status_list
 
+                # Sugestão Braço Novo já calculada e injetada antes do loop de regressão
+
                 # ── CPE: Detecção, Cálculo e Preenchimento do Template ─────────────────
-                # Mesma lógica da simulação individual — distância ≥ 40m aciona CPE.
+                # Regra revisada:
+                # distância >= 45m + desvio de potência histórica relevante.
+                # Sem média histórica da classe: fallback por distância.
                 # Para cada linha flagada, roda predições com distância/2 e aplica
                 # o mesmo ajuste NBR proporcional, garantindo consistência total.
                 col_dist_lote = next(
@@ -1370,12 +1834,59 @@ with tab_lote:
                 )
                 if col_dist_lote:
                     cpe_sim, cpe_qtd_veic, cpe_obs_list = [], [], []
+                    DIST_CPE_MIN_LOTE = 45.0
+                    POT_DESVIO_FATOR_LOTE = 1.40
                     for _, row_c in df_saida.iterrows():
                         dist_v = pd.to_numeric(row_c.get(col_dist_lote, 0), errors='coerce') or 0
-                        if dist_v >= 40.0:
+                        classe_v = str(row_c.get('Classificação viária', '')).upper()
+                        row_hist_v = medias_historicas[medias_historicas['Classe_Resumo'] == classe_v] if not medias_historicas.empty else pd.DataFrame()
+                        media_hist_v = row_hist_v['Média Histórica (W)'].iloc[0] if not row_hist_v.empty else None
+                        pot_vals = [
+                            row_c.get(f'{TARGETS_MAP["w"]} - {forn}')
+                            for forn in FORNECEDORES
+                            if pd.notna(row_c.get(f'{TARGETS_MAP["w"]} - {forn}'))
+                        ]
+                        pot_prev_row = np.mean(pot_vals) if pot_vals else None
+                        desvio_ok = (
+                            media_hist_v is not None and pot_prev_row is not None
+                            and pot_prev_row > media_hist_v * POT_DESVIO_FATOR_LOTE
+                        )
+                        aciona_regra = dist_v >= DIST_CPE_MIN_LOTE and (desvio_ok or media_hist_v is None)
+
+                        # Classificador ML como sinal adicional por linha
+                        cpe_ml_linha = False
+                        if clf_cpe is not None:
+                            try:
+                                row_ml = pd.DataFrame([{
+                                    'Faixas de Rodagem':        pd.to_numeric(row_c.get('Faixas de Rodagem', 2), errors='coerce') or 2,
+                                    'Largura Via 1':            pd.to_numeric(row_c.get('Largura Via 1', 7), errors='coerce') or 7,
+                                    'Largura Via 2':            pd.to_numeric(row_c.get('Largura Via 2', 0), errors='coerce') or 0,
+                                    'Largura Passeio 1':        pd.to_numeric(row_c.get('Largura Passeio 1', 2), errors='coerce') or 2,
+                                    'largura Passeio 2':        pd.to_numeric(row_c.get('largura Passeio 2', 2), errors='coerce') or 2,
+                                    'largura Canteiro Central': pd.to_numeric(row_c.get('largura Canteiro Central', 0), errors='coerce') or 0,
+                                    'altura da luminaria':      pd.to_numeric(row_c.get('altura da luminaria', 9), errors='coerce') or 9,
+                                    'projecao do braço':        pd.to_numeric(row_c.get('projecao do braço', 1.5), errors='coerce') or 1.5,
+                                    'distancia entre postes':   dist_v,
+                                    'distancia Poste a via':    pd.to_numeric(row_c.get('distancia Poste a via', 0.5), errors='coerce') or 0.5,
+                                    'Classificação viária':     classe_v,
+                                    'Tipo de estrutura':        row_c.get('Tipo de estrutura', 'Braço'),
+                                    'posteacao':                row_c.get('posteacao', 'Unilateral'),
+                                    'Fornecedor':               'LEDSTAR',
+                                }])
+                                cpe_ml_linha = int(clf_cpe.predict(row_ml)[0]) == 1
+                            except Exception:
+                                pass
+
+                        aciona_cpe = aciona_regra or cpe_ml_linha
+                        if aciona_cpe:
                             cpe_sim.append('Sim')
                             cpe_qtd_veic.append(1)
-                            cpe_obs_list.append(f"Redução {dist_v:.0f}m → {dist_v/2:.0f}m")
+                            obs = f"Redução {dist_v:.0f}m → {dist_v/2:.0f}m"
+                            if desvio_ok and media_hist_v is not None and pot_prev_row is not None:
+                                obs += f" | Pot {pot_prev_row:.0f}W > hist {media_hist_v:.0f}W"
+                            if cpe_ml_linha and not aciona_regra:
+                                obs += " | Detectado por ML"
+                            cpe_obs_list.append(obs)
                         else:
                             cpe_sim.append('Não')
                             cpe_qtd_veic.append(0)
@@ -1470,8 +1981,9 @@ with tab_lote:
                         st.markdown('<p class="section-title">⚠️ Correção de Ponto Escuro (CPE)</p>', unsafe_allow_html=True)
                         st.warning(
                             f"**{len(df_cpe_vis)} instalação(ões)** com risco de ponto escuro detectado(s) "
-                            f"(distância entre postes ≥ 40m). "
-                            "Recomenda-se inserção de estrutura intermediária."
+                            f"por regra de distância/potência ou pelo classificador ML 🤖. "
+                            "Recomenda-se inserção de estrutura intermediária. "
+                            "Veja a coluna **Observação CPE** para o motivo por linha."
                         )
                         cpe_rows_display = []
                         for _, row in df_cpe_vis.iterrows():
@@ -1495,10 +2007,25 @@ with tab_lote:
                             hide_index=True
                         )
 
+                # Gera o resultado no formato da tabela dinâmica (linha por ponto × fornecedor)
+                df_tabela = formatar_tabela_resultado(df_saida)
+                df_tabela_din = formatar_tabela_dinamica(df_saida)
+                df_preview_export = df_saida[cols_preview].copy()
+
                 buffer_resultado = io.BytesIO()
                 with pd.ExcelWriter(buffer_resultado, engine='openpyxl') as writer:
-                    df_export.to_excel(writer, index=False)
-                st.download_button('✅ Baixar Resultados no Template (.xlsx)', data=buffer_resultado.getvalue(), file_name='resultados_simulacao_HOUER.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', type='primary')
+                    df_tabela.to_excel(writer, sheet_name='Resultado', index=False)
+                    df_tabela_din.to_excel(writer, sheet_name='Tabela Dinâmica', index=False)
+                    df_preview_export.to_excel(writer, sheet_name='Dados Completos', index=False)
+                    df_export.to_excel(writer, sheet_name='Template Houer', index=False)
+                    writer.sheets['Template Houer'].sheet_state = 'hidden'
+                st.download_button(
+                    '✅ Baixar Resultados (.xlsx)',
+                    data=buffer_resultado.getvalue(),
+                    file_name='resultados_simulacao_HOUER.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    type='primary',
+                )
 
         except Exception as e:
             st.error(f'Erro ao processar: {str(e)}')
@@ -1602,6 +2129,8 @@ with tab_dash:
                 agg_dict = {col_pot_real: ['mean', 'count']}
                 if col_red in df.columns:
                     agg_dict[col_red] = 'mean'
+                if col_custo in df.columns:
+                    agg_dict[col_custo] = 'sum'
                 
                 analise_via = df.groupby('Classe_Resumo').agg(agg_dict).reset_index()
                 
@@ -1609,6 +2138,8 @@ with tab_dash:
                 novas_cols = ['Classe', 'Potência Média (W)', 'Quantidade']
                 if col_red in df.columns:
                     novas_cols.append('Economia Média (%)')
+                if col_custo in df.columns:
+                    novas_cols.append('CAPEX Total (R$)')
                 analise_via.columns = novas_cols
                 
                 # Mescla a média histórica de treinamento
@@ -1626,7 +2157,7 @@ with tab_dash:
                         cols.insert(idx_pot + 1, 'Média Histórica (W)')
                         analise_via = analise_via[cols]
                 
-                c1, c2 = st.columns([2, 1])
+                c1, c2, c3 = st.columns([1.5, 1.5, 1])
                 with c1:
                     fig_via = go.Figure()
                     fig_via.add_trace(go.Bar(
@@ -1637,6 +2168,16 @@ with tab_dash:
                     st.plotly_chart(fig_via, use_container_width=True)
                 
                 with c2:
+                    if 'CAPEX Total (R$)' in analise_via.columns:
+                        fig_capex = go.Figure()
+                        fig_capex.add_trace(go.Bar(
+                            x=analise_via['Classe'], y=analise_via['CAPEX Total (R$)'],
+                            name='CAPEX Total (R$)', marker_color='#00A9E0'
+                        ))
+                        fig_capex.update_layout(title="CAPEX Total por Tipo de Via", height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'))
+                        st.plotly_chart(fig_capex, use_container_width=True)
+                
+                with c3:
                     fig_pie = go.Figure(go.Pie(
                         labels=analise_via['Classe'], values=analise_via['Quantidade'],
                         hole=.4, marker=dict(colors=['#00A9E0', '#1B3664', '#64748b', '#334155'])
@@ -1649,6 +2190,8 @@ with tab_dash:
                     formato['Média Histórica (W)'] = '{:.1f} W'
                 if 'Economia Média (%)' in analise_via.columns:
                     formato['Economia Média (%)'] = '{:.1f} %'
+                if 'CAPEX Total (R$)' in analise_via.columns:
+                    formato['CAPEX Total (R$)'] = 'R$ {:,.2f}'
                 
                 st.dataframe(analise_via.style.format(formato, na_rep='-'), use_container_width=True, hide_index=True)
             else:

@@ -15,3 +15,12 @@ env/
 # OS/editor
 .DS_Store
 Thumbs.db
+
+# Claude Code (config local)
+.claude/
+
+# Arquivos locais/temporários — não fazem parte do app publicado
+planilhas_substituidas/
+temp_out_matozinhos/
+resultados simulação/
+temp_simul.xlsx

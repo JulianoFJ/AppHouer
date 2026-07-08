@@ -227,25 +227,47 @@ else:
 
 # ==============================================================================
 print(f"\n{sep}")
-print("  TESTE 3 â€” CPE: DetecÃ§Ã£o por DistÃ¢ncia (â‰¥ 40m)")
+print("  TESTE 3 â€” CPE: DistÃ¢ncia (â‰¥ 45m) + desvio histÃ³rico")
 print(sep)
 # ==============================================================================
 
+# Regra atual do app:
+# aciona se dist >= 45m e houver desvio de potÃªncia histÃ³rica relevante
+# (ou se nÃ£o houver histÃ³rico disponÃ­vel para a classe)
+DIST_CPE_MIN = 45.0
+POT_DESVIO_FATOR = 1.40
+
+def aciona_cpe(dist, pot_prev, media_hist):
+    cpe_por_dist = dist >= DIST_CPE_MIN
+    cpe_por_desvio = (
+        media_hist is not None and pot_prev is not None
+        and pot_prev > media_hist * POT_DESVIO_FATOR
+    )
+    return cpe_por_dist and (cpe_por_desvio or media_hist is None)
+
 # Deve disparar
-for dist in [40.0, 45.0, 55.0]:
-    aciona = dist >= 40.0
-    if aciona:
-        ok(f"CPE acionado para dist={dist}m")
+casos_on = [
+    (45.0, 150.0, 100.0),  # dist limiar + desvio
+    (55.0, 180.0, 100.0),  # dist alta + desvio
+    (50.0, 120.0, None),   # sem histÃ³rico, fallback por distÃ¢ncia
+]
+for dist, pot, hist in casos_on:
+    if aciona_cpe(dist, pot, hist):
+        ok(f"CPE acionado para dist={dist}m, pot={pot}, hist={hist}")
     else:
-        fail(f"CPE nÃ£o acionado para dist={dist}m")
+        fail(f"CPE nÃ£o acionado para dist={dist}m, pot={pot}, hist={hist}")
 
 # NÃ£o deve disparar
-for dist in [30.0, 35.0, 39.9]:
-    nao_aciona = dist < 40.0
-    if nao_aciona:
-        ok(f"CPE NÃƒO acionado para dist={dist}m (correto)")
+casos_off = [
+    (44.9, 200.0, 100.0),  # abaixo de 45m
+    (50.0, 130.0, 100.0),  # sem desvio suficiente (1.3x)
+    (35.0, 180.0, None),   # sem histÃ³rico, mas dist baixa
+]
+for dist, pot, hist in casos_off:
+    if not aciona_cpe(dist, pot, hist):
+        ok(f"CPE NÃƒO acionado para dist={dist}m, pot={pot}, hist={hist} (correto)")
     else:
-        fail(f"CPE disparou incorretamente para dist={dist}m")
+        fail(f"CPE disparou incorretamente para dist={dist}m, pot={pot}, hist={hist}")
 
 
 # ==============================================================================

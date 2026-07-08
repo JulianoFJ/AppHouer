@@ -3,6 +3,10 @@
 --------------------
 Lê as abas 'Simulações' das planilhas de simulação, filtra pelos fornecedores
 Ledstar, SX Lighting e Tecnowatt, seleciona as features físicas e salva dataset.csv.
+
+Além das features e targets originais, extrai:
+  - tem_cpe   : 1 se o ponto teve Correção de Ponto Escuro, 0 caso contrário
+  - Braço Novo: mantido como feature (usado tb como target de classificação no treino)
 """
 
 import sys
@@ -14,7 +18,7 @@ import numpy as np
 import os
 
 # ── Configurações ────────────────────────────────────────────────────────────
-PASTA = r'c:\Users\julia\OneDrive\Área de Trabalho\Houer\ML - Simulação'
+PASTA = os.path.dirname(os.path.abspath(__file__))
 
 FORNECEDORES_ALVO = ['LEDSTAR', 'SX LIGHTING', 'TECNOWATT']
 
@@ -41,6 +45,38 @@ FEATURES_CATEGORICAS = [
     'Fornecedor',   # feature — o modelo aprende o padrão de cada fornecedor
 ]
 
+# Apelidos de colunas — cada planilha de origem pode grafar o mesmo campo de forma
+# diferente (acentos, sufixos, sinônimos). O rename só é aplicado se o nome canônico
+# ainda não existir na planilha.
+ALIAS_COLUNAS = {
+    # ARMBH01.2 - Base de Simulações
+    'Faixas de Rodagem via C':                     'Faixas de Rodagem',
+    'Altura da luminária':                         'altura da luminaria',
+    'Distância entre postes':                      'distancia entre postes',
+    'Classificação viária (Análise do Cadastro)':  'Classificação viária',
+    # CEF06 (Recife) — Fator de Uniformidade grafado como Uniformidade Global Mínima
+    'Uniformidade Global Mínima':                  'Fator de Uniformidade',
+}
+
+def _normalizar_colunas(df):
+    """Renomeia apelidos conhecidos para o nome canônico (sem sobrescrever existentes)."""
+    renames = {orig: novo for orig, novo in ALIAS_COLUNAS.items()
+               if orig in df.columns and novo not in df.columns}
+    if renames:
+        df = df.rename(columns=renames)
+    return df, renames
+
+# Coluna de CPE — pode ter variação de encoding entre planilhas
+CPE_KEYWORDS = ['cpe', 'ponto escuro', 'corre']   # substrings para localizar a coluna
+
+def _achar_col_cpe(colunas):
+    """Retorna o nome da coluna de CPE na planilha, ou None se não encontrada."""
+    for c in colunas:
+        cl = c.lower()
+        if 'cpe' in cl or 'ponto escuro' in cl:
+            return c
+    return None
+
 TARGET_LMED = 'Luminância Média'
 TARGET_UO   = 'Fator de Uniformidade'
 TARGET_UL   = 'Uniformidade Longitudinal'
@@ -60,7 +96,14 @@ for arquivo in arquivos:
     caminho = os.path.join(PASTA, arquivo)
     print(f'[LENDO] {arquivo}')
 
-    xl = pd.ExcelFile(caminho, engine='openpyxl')
+    try:
+        xl = pd.ExcelFile(caminho, engine='openpyxl')
+    except PermissionError:
+        print(f'   [AVISO] Arquivo bloqueado (aberto no Excel?) — pulando: {arquivo}')
+        continue
+    except Exception as e:
+        print(f'   [AVISO] Não foi possível abrir {arquivo}: {e}')
+        continue
 
     # Encontra aba de simulações (flexível)
     aba = next((n for n in xl.sheet_names if 'simul' in n.lower()), None)
@@ -70,6 +113,10 @@ for arquivo in arquivos:
 
     df = pd.read_excel(caminho, sheet_name=aba, header=0, engine='openpyxl')
     print(f'   [OK] Aba: "{aba}" | {len(df)} linhas x {len(df.columns)} colunas')
+
+    df, renames = _normalizar_colunas(df)
+    if renames:
+        print(f'   [ALIAS] Colunas renomeadas: {renames}')
 
     # Diagnóstico: colunas esperadas x disponíveis
     todas_esperadas = FEATURES_NUMERICAS + FEATURES_CATEGORICAS + TARGETS
@@ -86,6 +133,18 @@ for arquivo in arquivos:
     cols_ok = [c for c in todas_esperadas if c in df.columns]
     df_sel = df[cols_ok].copy()
     df_sel['arquivo_origem'] = arquivo
+
+    # ── Extrai CPE como label binário ─────────────────────────────────────────
+    col_cpe = _achar_col_cpe(df.columns)
+    if col_cpe:
+        cpe_raw = df[col_cpe]
+        # Positivo: valor não-nulo E não-vazio (evita converter NaN→'nan' antes de checar)
+        cpe_valida = cpe_raw.notna() & (cpe_raw.astype(str).str.strip() != '')
+        df_sel['tem_cpe'] = cpe_valida.values.astype(int)
+        print(f'   [CPE] Coluna encontrada: "{col_cpe}" | positivos: {int(df_sel["tem_cpe"].sum())} / {len(df_sel)}')
+    else:
+        df_sel['tem_cpe'] = 0
+        print(f'   [CPE] Coluna não encontrada — tem_cpe = 0 para todas as linhas')
 
     dfs.append(df_sel)
     print(f'   [INFO] {len(df_sel)} linhas selecionadas')
@@ -155,11 +214,17 @@ df_limpo = filtrar(df_limpo, 'Largura Passeio 1',     vmin=0,   vmax=50)
 df_limpo = filtrar(df_limpo, 'largura Passeio 2',     vmin=0,   vmax=50)
 df_limpo = filtrar(df_limpo, 'altura da luminaria',   vmin=3,   vmax=25)
 df_limpo = filtrar(df_limpo, 'distancia entre poste', vmin=5,   vmax=85)
+# Uniformidades são razões (min/média): valores acima de 1 são erro de digitação
+df_limpo = filtrar(df_limpo, 'Fator de Uniformidade',      vmin=0, vmax=1)
+df_limpo = filtrar(df_limpo, 'Uniformidade Longitudinal',  vmin=0, vmax=1)
 print(f'  Outliers removidos no total: {antes - len(df_limpo)} linhas')
 
 output_limpo = os.path.join(PASTA, 'dataset_limpo.csv')
-df_limpo.to_csv(output_limpo, index=False, encoding='utf-8-sig')
-print(f'[OK] Dataset LIMPO salvo em: {output_limpo} ({len(df_limpo)} linhas)')
+try:
+    df_limpo.to_csv(output_limpo, index=False, encoding='utf-8-sig')
+    print(f'[OK] Dataset LIMPO salvo em: {output_limpo} ({len(df_limpo)} linhas)')
+except PermissionError:
+    print(f'[AVISO] dataset_limpo.csv está bloqueado (feche o arquivo e re-execute). Dataset bruto salvo com sucesso.')
 print(f'\nResumo Estatístico dos Alvos:')
 for tgt in TARGETS:
     if tgt in df_total.columns:
@@ -171,6 +236,13 @@ for tgt in TARGETS:
 if 'Potencia simulada - IP Principal (W)' in df_total.columns:
     print(f'\nEstatisticas do alvo - Potencia (W):')
     print(df_total['Potencia simulada - IP Principal (W)'].describe().to_string())
+
+if 'tem_cpe' in df_total.columns:
+    n_cpe = int(df_total['tem_cpe'].sum())
+    print(f'\n[CPE] Positivos no dataset final: {n_cpe} / {len(df_total)} ({n_cpe/len(df_total)*100:.1f}%)')
+if 'Braço Novo' in df_total.columns:
+    n_braco = int(df_total['Braço Novo'].notna().sum())
+    print(f'[Braço Novo] Linhas com troca registrada: {n_braco} / {len(df_total)}')
 
 print(f'\nAmostra por fornecedor:')
 for forn in FORNECEDORES_ALVO:
