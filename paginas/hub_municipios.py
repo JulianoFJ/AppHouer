@@ -214,6 +214,15 @@ aba_municipio, aba_mapa, aba_comparar, aba_base = st.tabs(
 # ABA 1 — ficha do município
 # ═════════════════════════════════════════════════════════════════════════════
 with aba_municipio:
+    # Município escolhido no mapa. Precisa ser consumido AQUI, antes de o text_input
+    # existir: escrever na chave de um widget já instanciado levanta
+    # StreamlitAPIException e derruba a página inteira. O mapa apenas grava a chave e
+    # dispara rerun; a leitura acontece no início do ciclo seguinte.
+    vindo_do_mapa = st.session_state.pop("hm_do_mapa", None)
+    if vindo_do_mapa:
+        st.session_state["hm_busca"] = str(vindo_do_mapa)
+        st.session_state["hm_uf"] = "(todas)"     # o código IBGE já identifica a UF
+
     b1, b2 = st.columns([3, 1])
     termo = b1.text_input("Município", placeholder="Nome ou código IBGE (7 dígitos)",
                           key="hm_busca")
@@ -528,7 +537,30 @@ with aba_mapa:
                     z_min, z_max = serie.min(), serie.max()
                 cortou = bool(serie.min() < z_min or serie.max() > z_max)
 
-                fig = go.Figure(go.Choroplethmap(
+                fig = go.Figure()
+
+                # Camada de contexto: TODOS os municípios da UF em cinza neutro. Sem ela
+                # só aparecem os que têm BDGD processada, o mapa fica com meia dúzia de
+                # manchas soltas e some a referência geográfica do estado. Ausência de
+                # dado precisa ser visível — e distinguível de valor baixo.
+                nomes_uf = _entes().set_index("cod_ibge")["ente"]
+                com_dado = set(dados_uf["codigo_municipio"])
+                sem_dado = sorted(malhas.codigos_da_malha(malha) - com_dado)
+                if sem_dado:
+                    fig.add_trace(go.Choroplethmap(
+                        geojson=malha, featureidkey="properties.codarea",
+                        locations=sem_dado, z=[0] * len(sem_dado),
+                        colorscale=[[0, "#1c2536"], [1, "#1c2536"]],
+                        showscale=False, hoverinfo="text",
+                        marker=dict(line=dict(color="#0b111e", width=0.3), opacity=0.55),
+                        # customdata também aqui: clicar num município sem BDGD ainda é
+                        # útil — a consulta de COSIP no SICONFI não depende do parque.
+                        customdata=[[c] for c in sem_dado],
+                        text=[f"{nomes_uf.get(c, c)}<br>sem BDGD processada" for c in sem_dado],
+                        hovertemplate="%{text}<extra></extra>",
+                    ))
+
+                fig.add_trace(go.Choroplethmap(
                     geojson=malha,
                     featureidkey="properties.codarea",
                     locations=dados_uf["codigo_municipio"],
@@ -536,7 +568,7 @@ with aba_mapa:
                     zmin=z_min, zmax=z_max,
                     colorscale=ESCALA_MAGNITUDE,
                     reversescale=cfg_ind.get("inverter", False),
-                    marker=dict(line=dict(color="#0b111e", width=0.4), opacity=0.85),
+                    marker=dict(line=dict(color="#0b111e", width=0.4), opacity=0.9),
                     colorbar=dict(title=dict(text=nome_ind.split(" (")[0],
                                              font=dict(color=TINTA_FRACA, size=11)),
                                   tickfont=dict(color=TINTA_FRACA), thickness=12, len=0.75),
@@ -559,27 +591,48 @@ with aba_mapa:
 
                 sel = (evento.get("selection", {}) or {}).get("points", []) if evento else []
                 if sel:
-                    idx = sel[0].get("point_index")
+                    # O clique pode cair na camada de contexto (trace 0) ou na de dados;
+                    # `customdata` existe nas duas justamente para o código sair igual.
+                    ponto = sel[0]
                     cod = None
-                    if sel[0].get("customdata"):
-                        cod = sel[0]["customdata"][0]
-                    elif idx is not None and idx < len(dados_uf):
-                        cod = dados_uf.iloc[idx]["codigo_municipio"]
-                    if cod:
-                        st.session_state["hm_busca"] = str(cod)
+                    if ponto.get("customdata"):
+                        cod = ponto["customdata"][0]
+                    else:
+                        idx, curva = ponto.get("point_index"), ponto.get("curve_number", 0)
+                        origem = sem_dado if (sem_dado and curva == 0) else \
+                            dados_uf["codigo_municipio"].tolist()
+                        if idx is not None and idx < len(origem):
+                            cod = origem[idx]
+
+                    # NÃO escrever em `hm_busca` aqui: essa é a chave do text_input da aba
+                    # Município, que o Streamlit já instanciou neste mesmo ciclo (st.tabs
+                    # executa o conteúdo de todas as abas), e escrever na chave de um
+                    # widget já criado levanta StreamlitAPIException — derrubando a página
+                    # inteira. O código vai para uma chave PRÓPRIA e a aba Município o
+                    # consome no início do ciclo seguinte, antes de criar o widget.
+                    # A guarda usa uma chave PERSISTENTE (`hm_ultimo_clique`), não a que a
+                    # aba Município consome: o Streamlit preserva a seleção do gráfico
+                    # entre reruns, então comparar com a chave consumida faria o clique
+                    # ser reprocessado a cada ciclo — loop infinito de st.rerun().
+                    if cod and st.session_state.get("hm_ultimo_clique") != str(cod):
+                        st.session_state["hm_ultimo_clique"] = str(cod)
+                        st.session_state["hm_do_mapa"] = str(cod)
+                        st.rerun()
+                    elif cod:
                         linha = dados_uf[dados_uf["codigo_municipio"] == cod]
                         nome = (linha.iloc[0].get("municipio") or cod) if not linha.empty else cod
                         st.success(
-                            f"**{nome}** selecionado (IBGE {cod}). Abra a aba "
-                            "**🔎 Município** — a busca já está preenchida com esse código.",
+                            f"**{nome}** (IBGE {cod}) enviado para a aba **🔎 Município**.",
                             icon="📍",
                         )
 
                 st.caption(
-                    f"{len(dados_uf)} municípios de {uf_mapa} com dado de "
-                    f"“{nome_ind}”. Municípios em branco não têm BDGD processada ou não "
-                    "declararam o indicador. **Clique em um município** para levá-lo à aba "
-                    "Município. Malha: IBGE, subdivisão municipal, qualidade mínima."
+                    f"**{len(dados_uf)} de {len(dados_uf) + len(sem_dado)} municípios "
+                    f"de {uf_mapa}** têm dado de “{nome_ind}”; os "
+                    f"{len(sem_dado)} em cinza ainda não têm BDGD processada. "
+                    "**Clique em qualquer município** para levá-lo à aba Município — a "
+                    "consulta de COSIP funciona mesmo sem o parque. "
+                    "Malha: IBGE, subdivisão municipal, qualidade mínima."
                     + (f"  A rampa de cor está cortada nos percentis 5–95 "
                        f"({pref}{indicadores.formatar_numero(z_min, casas)}{suf} a "
                        f"{pref}{indicadores.formatar_numero(z_max, casas)}{suf}) para que "
