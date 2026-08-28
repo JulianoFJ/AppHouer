@@ -66,17 +66,19 @@ def garantir_pastas() -> None:
 
 
 # ── Parâmetros de negócio ───────────────────────────────────────────────────
-# Tarifa B4a (rede de distribuição) média com tributos, R$/kWh. É um DEFAULT de
-# triagem, não premissa de estudo: a tarifa real vem da resolução homologatória da
-# distribuidora e do regime tributário do município. Editável na interface.
-TARIFA_B4A_PADRAO = 0.72
+# Custo de referência da PPP de iluminação pública, em R$ por ponto por MÊS. É o
+# único parâmetro financeiro da triagem, e substituiu a combinação anterior
+# "tarifa R$/kWh x consumo da BDGD". A troca resolve dois problemas:
+#   1. é o número que o time já usa e que o mercado cota — R$ 38 na planilha CLP,
+#      R$ 32 no estudo da RMBH, mediana de R$ 34,23 nos 181 contratos assinados;
+#   2. o consumo em kWh da BDGD é inutilizável em 1.820 dos 5.417 municípios
+#      (33,6%), e amarrar o indicador a ele condenava um terço do país a número
+#      errado. Contagem de pontos e carga instalada seguem confiáveis.
+CUSTO_PPP_PONTO_MES_PADRAO = 38.00
 
-# Consumo de referência para estimar o potencial de eficientização (W médio por
-# ponto após retrofit integral em LED). Faixa de mercado 45–75 W; 60 W é conservador
-# para via urbana típica. Também editável na interface.
-POTENCIA_LED_REFERENCIA_W = 60.0
+POTENCIA_FUTURA_PADRAO_W = 60.0
 
-# Horas de operação anuais. O valor observado na BDGD da Cemig-D (2024) é 4.160 h/ano
-# (11,4 h/dia), coerente com acionamento por relé fotoelétrico. Usado apenas quando o
-# município não tem consumo declarado na BDGD.
+# Horas de operação anuais observadas na BDGD da Cemig-D (2024): 4.160 h/ano,
+# ou 11,4 h/dia — coerente com acionamento por relé fotoelétrico. Usada apenas nas
+# checagens de consistência do dado da distribuidora, não nos indicadores.
 HORAS_OPERACAO_ANO = 4160.0

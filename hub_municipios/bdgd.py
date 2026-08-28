@@ -491,10 +491,31 @@ def salvar_agregado_base(res: ResultadoETL) -> None:
             config.BDGD_PROCESSADOS / f"tecnologia_{res.base.slug}.parquet", index=False)
 
 
+def _apenas_mais_recentes(arquivos: List[Path]) -> List[Path]:
+    """
+    Um agregado por distribuidora, o de data-base mais nova.
+
+    O slug termina em `<coddist>_<ano>`, então processar duas versões da mesma
+    distribuidora (a M10/2017 e a V11/2024 da Energisa MT, por exemplo) deixaria os
+    dois agregados em disco — e a consolidação somaria os parques como se fossem
+    concessionárias distintas, dobrando os pontos daquele estado.
+    """
+    melhor: Dict[str, tuple] = {}
+    for arq in arquivos:
+        partes = arq.stem.split("_")
+        if len(partes) >= 2 and partes[-1].isdigit() and partes[-2].isdigit():
+            chave, ano = partes[-2], int(partes[-1])
+        else:
+            chave, ano = arq.stem, 0
+        if chave not in melhor or ano > melhor[chave][0]:
+            melhor[chave] = (ano, arq)
+    return [arq for _, arq in sorted(melhor.values(), key=lambda t: t[1].name)]
+
+
 def consolidar_de_disco() -> Dict[str, pd.DataFrame]:
     """Junta todos os agregados por base já gravados, sem reprocessar geodatabase."""
-    mun_arqs = sorted(config.BDGD_PROCESSADOS.glob("agregado_*.parquet"))
-    tec_arqs = sorted(config.BDGD_PROCESSADOS.glob("tecnologia_*.parquet"))
+    mun_arqs = _apenas_mais_recentes(sorted(config.BDGD_PROCESSADOS.glob("agregado_*.parquet")))
+    tec_arqs = _apenas_mais_recentes(sorted(config.BDGD_PROCESSADOS.glob("tecnologia_*.parquet")))
     if not mun_arqs:
         return {"municipios": pd.DataFrame(), "tecnologia": pd.DataFrame()}
 

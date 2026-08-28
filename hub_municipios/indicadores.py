@@ -1,25 +1,39 @@
 """
-Cruzamento COSIP (SICONFI) × parque de IP (BDGD) e os indicadores derivados.
+Triagem de pré-viabilidade de PPP de iluminação pública.
 
-A pergunta que o módulo responde é a de triagem de PPP de iluminação pública:
-**a arrecadação da COSIP sustenta o serviço?** Para isso não basta o valor absoluto —
-ele só significa alguma coisa dividido pelo parque que precisa custear.
+Reproduz a metodologia que o time aplica à mão na planilha `CLP.xlsx` e no painel
+"SMART RMBH", com as duas bases já integradas: a arrecadação de COSIP declarada ao
+SICONFI e o parque de IP da BDGD/ANEEL.
 
-Indicadores
------------
-- `cosip_por_ponto_ano`   R$/ponto/ano — a métrica que dialoga direto com a
-                          contraprestação de uma PPP, cotada na mesma unidade.
-- `cosip_por_habitante`   R$/hab/ano — compara entes de portes diferentes.
-- `custo_energia_estimado` consumo BDGD × tarifa B4a.
-- `cobertura_energia`     quantas vezes a COSIP cobre a conta de energia. Abaixo de
-                          1,0 a contribuição não paga nem a energia — não há espaço
-                          para O&M nem para investimento sem outra fonte.
-- `saldo_apos_energia`    o que sobra por ano para O&M, modernização e contraprestação.
-- `economia_potencial_*`  ganho de um retrofit integral em LED, à potência de referência.
+A conta
+-------
+    arrecadação por ponto (R$/ponto.mês) = COSIP líquida ÷ (pontos × 12)
+    sobra (R$/ponto.mês)                 = arrecadação por ponto − custo da PPP
+    sobra (%)                            = sobra ÷ arrecadação por ponto
 
-Todos os cruzamentos carregam `defasagem_anos` — a distância entre o exercício da COSIP
-e a data-base da BDGD. Comparar arrecadação de 2024 com parque de 2017 é possível, mas
-o leitor precisa saber que está fazendo isso.
+O **custo da PPP em R$ por ponto por mês** é o único parâmetro financeiro, e é
+informado pelo usuário. Ele substituiu a combinação anterior "tarifa R$/kWh × consumo
+da BDGD", por dois motivos:
+
+1. é o número que o time já usa (R$ 38/ponto.mês na CLP, R$ 32 no estudo da RMBH) e
+   que o mercado cota — a mediana dos 181 contratos de PPP assinados é R$ 34,23;
+2. o consumo em kWh da BDGD é **inutilizável em 1.820 dos 5.417 municípios** (33,6%,
+   6,7 milhões de pontos): Neoenergia Elektro declara 0 h/ano de operação, Copel 13 h,
+   Enel CE 13.415 h. Amarrar o indicador financeiro ao consumo condenava um terço do
+   país a número errado. Contagem de pontos e carga instalada seguem confiáveis.
+
+Classificação de viabilidade
+----------------------------
+    Já possui PPP   — contrato de PPP de IP vigente (base de 181 contratos)
+    Viável          — sobra positiva E arrecadação acima do corte
+    Viabilizável    — sobra positiva, mas arrecadação abaixo do corte: precisa de
+                      consórcio, agregação regional ou revisão da lei da COSIP
+    Não viável      — a COSIP não cobre a contraprestação de referência
+    Não possui CIP  — o município não declarou arrecadação de COSIP
+
+O corte de arrecadação (R$ 4,5 milhões/ano por padrão) é o mesmo da CLP, e foi
+conferido contra o painel da RMBH: Brumadinho (R$ 4,57 mi) é "Viável"; Caeté
+(R$ 1,88 mi), com sobra por ponto igualmente positiva, é "Viabilizável".
 """
 
 from __future__ import annotations
@@ -28,54 +42,92 @@ from typing import Optional
 
 import pandas as pd
 
-from . import config
+from . import config, estimativa
+
+# ── parâmetros de classificação ─────────────────────────────────────────────
+# Corte de arrecadação anual abaixo do qual o projeto não se sustenta sozinho —
+# escala pequena demais para o custo de transação de uma PPP. Da metodologia da CLP.
+CORTE_ARRECADACAO_PADRAO = 4_500_000.0
+
+# Preço de energia usado APENAS para traduzir a economia do retrofit em reais. Não é
+# exposto na interface: o usuário informa o custo da PPP, não a tarifa. R$ 0,72/kWh é
+# a ordem de grandeza da B4a com tributos; a economia é indicativa, não orçamento.
+PRECO_ENERGIA_REFERENCIA = 0.72
+
+# Horas anuais de operação para converter carga em energia. 4.160 h/ano (11,4 h/dia) é
+# o valor medido na BDGD da Cemig-D e coerente com acionamento por relé fotoelétrico.
+HORAS_OPERACAO = config.HORAS_OPERACAO_ANO
+
+# Piso de plausibilidade da declaração de COSIP, em R$ por ponto por ano. Abaixo disso
+# o valor não é arrecadação, é erro de preenchimento do DCA. Caso real: Passos/MG
+# declarou R$ 16,35 no exercício de 2025 para um parque de 15.573 pontos.
+PISO_PLAUSIBILIDADE_POR_PONTO = 12.0
+
+# Faixa física de operação da IP. Fora dela, o consumo declarado pela distribuidora é
+# inconsistente — hoje isso não afeta a triagem (que não usa consumo), mas continua
+# sinalizado porque invalida a leitura de eficiência do parque.
+HORAS_MIN_PLAUSIVEL, HORAS_MAX_PLAUSIVEL = 3000.0, 5000.0
+
+VIABILIDADE_JA_TEM_PPP = "Já possui PPP"
+VIABILIDADE_VIAVEL = "Viável"
+VIABILIDADE_VIABILIZAVEL = "Viabilizável"
+VIABILIDADE_NAO_VIAVEL = "Não viável"
+VIABILIDADE_SEM_CIP = "Não possui CIP"
 
 COLUNAS_INDICADORES = [
-    "codigo_municipio", "municipio", "uf", "ano_exercicio",
-    "cosip_liquida", "receita_bruta", "deducoes", "populacao", "status",
-    "pontos_ip", "carga_instalada_kw", "consumo_kwh_ano", "potencia_media_w",
-    "perc_led", "perc_urbano", "consumo_kwh_ponto_ano", "horas_equivalentes_ano",
-    "distribuidora", "ano_base_bdgd", "defasagem_anos",
-    "cosip_por_ponto_ano", "cosip_por_habitante", "pontos_por_mil_hab",
-    "custo_energia_estimado", "cobertura_energia", "saldo_apos_energia",
-    "saldo_por_ponto_ano", "consumo_led_kwh_ano",
-    "economia_potencial_kwh_ano", "economia_potencial_reais_ano",
-    "custo_energia_pos_retrofit", "espaco_pos_retrofit",
-    "espaco_ponto_mes_atual", "espaco_ponto_mes_pos_retrofit",
+    # identificação
+    "codigo_municipio", "municipio", "uf", "ano_exercicio", "status",
+    # arrecadação
+    "cosip_liquida", "receita_bruta", "deducoes", "populacao",
+    # parque
+    "pontos_ip", "origem_pontos", "carga_instalada_kw", "potencia_media_w",
+    "perc_led", "distribuidora", "ano_base_bdgd", "defasagem_anos",
+    "consumo_kwh_ano", "horas_equivalentes_ano",
+    # triagem
+    "cosip_ponto_mes", "cosip_por_ponto_ano", "cosip_por_habitante",
+    "pontos_por_mil_hab", "custo_ppp_ponto_mes",
+    "contraprestacao_mes", "contraprestacao_ano",
+    "sobra_ponto_mes", "sobra_percentual", "sobra_reais_ano",
+    # modernização
+    "potencia_futura_w", "economia_percentual", "economia_kwh_ano",
+    "economia_reais_ano",
+    # classificação e qualidade do dado
+    "viabilidade", "tem_ppp", "concessionaria_ppp", "ano_ppp",
     "declaracao_implausivel", "consumo_bdgd_suspeito",
 ]
 
-# Faixa física de operação da IP: relé fotoelétrico liga 11–12 h/dia, ou seja
-# 4.000–4.400 h/ano. Fora de 3.000–5.000 h o consumo ou a carga declarados à ANEEL estão
-# inconsistentes, e todo indicador que depende do consumo (custo de energia, cobertura,
-# economia potencial) deixa de valer para aquele município. Casos reais encontrados em
-# 28/08/2026: Demei/RS 6.259 h, Cocel/PR 5.340 h, Roraima Energia 2.336 h.
-HORAS_MIN_PLAUSIVEL, HORAS_MAX_PLAUSIVEL = 3000.0, 5000.0
 
-# Piso de plausibilidade da declaração: R$/ponto/ano abaixo do qual o valor não pode ser
-# arrecadação real — é erro de preenchimento do DCA. R$ 12/ponto/ano equivale a R$ 1 por
-# ponto por MÊS; nenhuma lei de COSIP em vigor produz isso. Caso observado em 28/08/2026:
-# Passos/MG declarou R$ 134,83 (2020) e R$ 16,35 (2025) para um parque de 15.573 pontos.
-# Sem esse filtro, o município entra em qualquer ranking como "o pior do estado" e
-# distorce mediana, gráfico e conclusão.
-PISO_PLAUSIBILIDADE_POR_PONTO = 12.0
+def _numerica(df: pd.DataFrame, coluna: str) -> pd.Series:
+    """
+    Coluna como Series numérica, mesmo quando ela não existe no DataFrame.
+
+    `pd.to_numeric(df.get("x"))` devolve um escalar quando a coluna falta, e o escalar
+    não tem `.notna()` nem alinha em operação vetorizada — o erro só aparece com um
+    parque parcial (BDGD antiga sem campos de lâmpada, ou município só com COSIP).
+    """
+    if coluna not in df.columns:
+        return pd.Series(pd.NA, index=df.index, dtype="Float64")
+    return pd.to_numeric(df[coluna], errors="coerce")
 
 
 def cruzar(
     cosip: pd.DataFrame,
     parque: Optional[pd.DataFrame] = None,
-    tarifa_kwh: float = config.TARIFA_B4A_PADRAO,
-    potencia_led_w: float = config.POTENCIA_LED_REFERENCIA_W,
+    custo_ppp_ponto_mes: float = config.CUSTO_PPP_PONTO_MES_PADRAO,
+    potencia_futura_w: float = config.POTENCIA_FUTURA_PADRAO_W,
+    corte_arrecadacao: float = CORTE_ARRECADACAO_PADRAO,
+    estimar_sem_bdgd: bool = True,
 ) -> pd.DataFrame:
     """
-    Junta a COSIP (uma linha por município/ano) ao parque de IP (uma linha por
-    município) e calcula os indicadores. Municípios sem BDGD são preservados, com as
-    colunas de parque vazias — ausência de base da distribuidora não pode sumir com o
-    município da análise.
-    """
-    from . import bdgd  # import tardio: evita exigir a BDGD para usar só a COSIP
+    Junta COSIP (uma linha por município/ano) ao parque de IP (uma linha por município)
+    e devolve a triagem completa.
 
-    if cosip.empty:
+    Municípios sem BDGD ganham parque estimado pela população, sempre marcados em
+    `origem_pontos`. Nenhum município é descartado por falta de base da distribuidora.
+    """
+    from . import bdgd, ppp as ppp_mod   # import tardio: evita ciclo e carga desnecessária
+
+    if cosip is None or cosip.empty:
         return pd.DataFrame(columns=COLUNAS_INDICADORES)
 
     if parque is None:
@@ -87,55 +139,62 @@ def cruzar(
     if parque is not None and not parque.empty:
         parque = parque.copy()
         parque["codigo_municipio"] = parque["codigo_municipio"].astype(str)
-        colunas_parque = [c for c in parque.columns if c != "codigo_municipio"]
-        df = df.merge(parque, on="codigo_municipio", how="left", suffixes=("", "_bdgd"))
+        colunas = [c for c in ("codigo_municipio", "pontos_ip", "carga_instalada_kw",
+                               "consumo_kwh_ano", "potencia_media_w", "perc_led",
+                               "horas_equivalentes_ano", "distribuidora", "ano_base_bdgd")
+                   if c in parque.columns]
+        df = df.merge(parque[colunas], on="codigo_municipio", how="left")
     else:
         for col in ("pontos_ip", "carga_instalada_kw", "consumo_kwh_ano",
-                    "potencia_media_w", "perc_led", "perc_urbano",
-                    "consumo_kwh_ponto_ano", "horas_equivalentes_ano",
+                    "potencia_media_w", "perc_led", "horas_equivalentes_ano",
                     "distribuidora", "ano_base_bdgd"):
             df[col] = pd.NA
 
-    # ── indicadores ──────────────────────────────────────────────────────────
-    pontos = pd.to_numeric(df.get("pontos_ip"), errors="coerce")
-    pop = pd.to_numeric(df.get("populacao"), errors="coerce")
-    cosip_liq = pd.to_numeric(df.get("cosip_liquida"), errors="coerce")
-    consumo = pd.to_numeric(df.get("consumo_kwh_ano"), errors="coerce")
+    # ── parque medido ou estimado, sempre etiquetado ────────────────────────
+    if estimar_sem_bdgd:
+        df = estimativa.completar_parque(df)
+    else:
+        df["origem_pontos"] = pd.to_numeric(df["pontos_ip"], errors="coerce").notna().map(
+            {True: estimativa.ORIGEM_MEDIDA, False: None})
 
-    df["cosip_por_ponto_ano"] = cosip_liq / pontos.replace(0, pd.NA)
+    pontos = _numerica(df, "pontos_ip")
+    pop = _numerica(df, "populacao")
+    cosip_liq = _numerica(df, "cosip_liquida")
+    pontos_validos = pontos.replace(0, pd.NA)
+
+    # ── a conta da triagem ──────────────────────────────────────────────────
+    custo = float(custo_ppp_ponto_mes)
+    df["custo_ppp_ponto_mes"] = custo
+    df["cosip_ponto_mes"] = cosip_liq / (pontos_validos * 12.0)
+    df["cosip_por_ponto_ano"] = cosip_liq / pontos_validos
     df["cosip_por_habitante"] = cosip_liq / pop.replace(0, pd.NA)
     df["pontos_por_mil_hab"] = pontos / (pop.replace(0, pd.NA) / 1000.0)
 
-    df["custo_energia_estimado"] = consumo * float(tarifa_kwh)
-    df["cobertura_energia"] = cosip_liq / df["custo_energia_estimado"].replace(0, pd.NA)
-    df["saldo_apos_energia"] = cosip_liq - df["custo_energia_estimado"]
-    df["saldo_por_ponto_ano"] = df["saldo_apos_energia"] / pontos.replace(0, pd.NA)
+    df["contraprestacao_mes"] = pontos * custo
+    df["contraprestacao_ano"] = df["contraprestacao_mes"] * 12.0
+    df["sobra_ponto_mes"] = df["cosip_ponto_mes"] - custo
+    df["sobra_percentual"] = df["sobra_ponto_mes"] / df["cosip_ponto_mes"].replace(0, pd.NA)
+    df["sobra_reais_ano"] = cosip_liq - df["contraprestacao_ano"]
 
-    # Retrofit integral: mantém as horas de operação observadas no próprio município
-    # (o regime de acionamento não muda com a troca da luminária).
-    horas_declaradas = pd.to_numeric(df.get("horas_equivalentes_ano"), errors="coerce")
-    horas = horas_declaradas.fillna(config.HORAS_OPERACAO_ANO)
-    df["consumo_led_kwh_ano"] = pontos * float(potencia_led_w) * horas / 1000.0
-    df["economia_potencial_kwh_ano"] = (consumo - df["consumo_led_kwh_ano"]).clip(lower=0)
-    df["economia_potencial_reais_ano"] = df["economia_potencial_kwh_ano"] * float(tarifa_kwh)
+    # ── modernização do parque ──────────────────────────────────────────────
+    # Usa carga instalada e nº de pontos, que são confiáveis em toda a base — não o
+    # consumo declarado, que não é. A energia é derivada de horas de referência.
+    pot_atual = _numerica(df, "potencia_media_w")
+    df["potencia_futura_w"] = float(potencia_futura_w)
+    df["economia_percentual"] = ((pot_atual - float(potencia_futura_w)) /
+                                 pot_atual.replace(0, pd.NA)).clip(lower=0)
+    carga_reduzida_kw = (pontos * (pot_atual - float(potencia_futura_w)).clip(lower=0)) / 1000.0
+    df["economia_kwh_ano"] = carga_reduzida_kw * HORAS_OPERACAO
+    df["economia_reais_ano"] = df["economia_kwh_ano"] * PRECO_ENERGIA_REFERENCIA
 
-    # ── Espaço para contraprestação ──────────────────────────────────────────
-    # A eficientização é o que financia a PPP de IP: o retrofit derruba a conta de
-    # energia, e a diferença é o que passa a caber na contraprestação. Por isso o espaço
-    # RELEVANTE não é o saldo de hoje, e sim o saldo depois do retrofit.
-    #
-    # Premissa embutida: modelo em que a ENERGIA CONTINUA COM O MUNICÍPIO e a
-    # contraprestação remunera CAPEX + O&M — o arranjo mais comum no Brasil. Se a
-    # concessionária assumir a energia, o espaço passa a ser a COSIP inteira e estes
-    # números viram piso, não teto.
-    df["custo_energia_pos_retrofit"] = df["consumo_led_kwh_ano"] * float(tarifa_kwh)
-    df["espaco_pos_retrofit"] = cosip_liq - df["custo_energia_pos_retrofit"]
-
-    # R$/ponto/mês é a unidade em que a contraprestação de PPP de IP é cotada no
-    # mercado — é o número que dialoga direto com uma proposta.
-    pontos_mes = (pontos.replace(0, pd.NA) * 12.0)
-    df["espaco_ponto_mes_atual"] = df["saldo_apos_energia"] / pontos_mes
-    df["espaco_ponto_mes_pos_retrofit"] = df["espaco_pos_retrofit"] / pontos_mes
+    # ── qualidade do dado ───────────────────────────────────────────────────
+    df["declaracao_implausivel"] = (
+        df["cosip_por_ponto_ano"].notna()
+        & (df["cosip_por_ponto_ano"] < PISO_PLAUSIBILIDADE_POR_PONTO)
+    )
+    horas = _numerica(df, "horas_equivalentes_ano")
+    df["consumo_bdgd_suspeito"] = (
+        horas.notna() & ~horas.between(HORAS_MIN_PLAUSIVEL, HORAS_MAX_PLAUSIVEL))
 
     if "ano_base_bdgd" in df.columns:
         df["defasagem_anos"] = (pd.to_numeric(df["ano_exercicio"], errors="coerce") -
@@ -143,16 +202,19 @@ def cruzar(
     else:
         df["defasagem_anos"] = pd.NA
 
-    df["declaracao_implausivel"] = (
-        df["cosip_por_ponto_ano"].notna()
-        & (df["cosip_por_ponto_ano"] < PISO_PLAUSIBILIDADE_POR_PONTO)
-    )
-    # Usa as horas DECLARADAS, não as preenchidas com o default: preencher a lacuna com
-    # o valor de referência não pode fabricar um "dado consistente".
-    df["consumo_bdgd_suspeito"] = (
-        horas_declaradas.notna()
-        & ~horas_declaradas.between(HORAS_MIN_PLAUSIVEL, HORAS_MAX_PLAUSIVEL)
-    )
+    # ── PPP existente ───────────────────────────────────────────────────────
+    contratos = ppp_mod.carregar()
+    if not contratos.empty:
+        c = contratos.drop_duplicates("codigo_municipio").set_index("codigo_municipio")
+        df["tem_ppp"] = df["codigo_municipio"].isin(c.index)
+        df["concessionaria_ppp"] = df["codigo_municipio"].map(c["concessionaria"])
+        df["ano_ppp"] = df["codigo_municipio"].map(c["ano_assinatura"])
+    else:
+        df["tem_ppp"] = False
+        df["concessionaria_ppp"] = pd.NA
+        df["ano_ppp"] = pd.NA
+
+    df["viabilidade"] = _classificar(df, corte_arrecadacao)
 
     for col in COLUNAS_INDICADORES:
         if col not in df.columns:
@@ -160,74 +222,91 @@ def cruzar(
     return df[COLUNAS_INDICADORES].reset_index(drop=True)
 
 
+def _classificar(df: pd.DataFrame, corte: float) -> pd.Series:
+    """
+    Ordem das regras importa: contrato vigente vence qualquer cálculo, e ausência de
+    COSIP vence a conta de sobra (não dá para dividir uma arrecadação que não existe).
+    """
+    sobra = pd.to_numeric(df["sobra_ponto_mes"], errors="coerce")
+    arrecadacao = pd.to_numeric(df["cosip_liquida"], errors="coerce")
+    tem_cosip = arrecadacao.notna() & (arrecadacao > 0) & ~df["declaracao_implausivel"]
+
+    classe = pd.Series(VIABILIDADE_SEM_CIP, index=df.index, dtype=object)
+    tem_escala = arrecadacao >= corte
+
+    # Abaixo do corte, o que falta é ESCALA — o município pode ser viabilizado por
+    # consórcio regional ou revisão da lei da COSIP, tenha a sobra sinal positivo ou
+    # negativo. Só é "Não viável" quem já tem escala e ainda assim não cobre a
+    # contraprestação: aí o problema é a arrecadação por ponto, não o tamanho.
+    # Conferido contra o painel SMART RMBH: Caeté (R$ 30,00/ponto contra custo de
+    # R$ 32,00, portanto sobra negativa, mas só R$ 1,88 mi/ano) é "Viabilizável" lá.
+    classe[tem_cosip & ~tem_escala] = VIABILIDADE_VIABILIZAVEL
+    classe[tem_cosip & tem_escala & (sobra > 0)] = VIABILIDADE_VIAVEL
+    classe[tem_cosip & tem_escala & (sobra <= 0)] = VIABILIDADE_NAO_VIAVEL
+    classe[df["tem_ppp"].fillna(False).astype(bool)] = VIABILIDADE_JA_TEM_PPP
+    return classe
+
+
 def ressalvas(linha: pd.Series) -> list[str]:
-    """
-    Ressalvas que devem acompanhar o número quando ele sai da tela. São as mesmas que
-    um parecer de due diligence exigiria — não são decorativas.
-    """
+    """Ressalvas que precisam acompanhar o número quando ele sai da tela."""
     avisos: list[str] = []
 
     status = linha.get("status")
     if status == "SEM_DADO_NO_ANEXO":
         avisos.append(
-            "O município não declarou a rubrica de COSIP neste exercício. Isso pode ser "
-            "ausência de lei instituidora ou falha de declaração — confirme na legislação "
-            "municipal antes de concluir que não há arrecadação."
+            "O município não declarou COSIP neste exercício. Pode ser ausência de lei "
+            "instituidora ou falha de declaração — confirme na legislação municipal "
+            "antes de concluir que não há arrecadação."
         )
     elif status == "ENTE_NAO_DECLAROU":
         avisos.append("A API do SICONFI não retornou o Anexo I-C para este exercício.")
+
+    if bool(linha.get("declaracao_implausivel")):
+        avisos.append(
+            f"**Declaração implausível.** O valor informado equivale a "
+            f"{formatar_moeda(linha.get('cosip_por_ponto_ano'))} por ponto por ANO, abaixo "
+            f"do piso técnico de {formatar_moeda(PISO_PLAUSIBILIDADE_POR_PONTO)}. É erro de "
+            "preenchimento do DCA, não baixa arrecadação. Busque o balancete municipal."
+        )
+
+    if linha.get("origem_pontos") == estimativa.ORIGEM_ESTIMADA:
+        avisos.append(
+            "**Parque estimado, não medido.** Este município não tem BDGD processada; os "
+            "pontos de IP foram estimados pela população, com a densidade mediana da faixa "
+            "de porte dele. Todos os indicadores por ponto herdam essa incerteza."
+        )
+
+    if bool(linha.get("tem_ppp")):
+        conc = linha.get("concessionaria_ppp")
+        ano = linha.get("ano_ppp")
+        detalhe = f" ({conc}" + (f", {int(ano)}" if pd.notna(ano) else "") + ")" if pd.notna(conc) else ""
+        avisos.append(f"**O município já tem PPP de iluminação pública{detalhe}.** "
+                      "A triagem de arrecadação segue válida como referência, mas o ente "
+                      "não é alvo de nova estruturação.")
 
     defasagem = linha.get("defasagem_anos")
     if pd.notna(defasagem) and abs(float(defasagem)) >= 2:
         avisos.append(
             f"A COSIP é do exercício {int(linha['ano_exercicio'])} e o parque é da BDGD de "
-            f"{int(linha['ano_base_bdgd'])} — {abs(int(defasagem))} anos de defasagem. "
-            "Os indicadores por ponto misturam períodos."
-        )
-
-    if pd.isna(linha.get("pontos_ip")):
-        avisos.append(
-            "Sem BDGD para este município: os indicadores por ponto não foram calculados. "
-            "Processe a base da distribuidora que atende o ente."
+            f"{int(linha['ano_base_bdgd'])} — {abs(int(defasagem))} anos de defasagem."
         )
 
     if bool(linha.get("consumo_bdgd_suspeito")):
         horas = float(linha.get("horas_equivalentes_ano"))
-        comparacao = "acima" if horas > HORAS_MAX_PLAUSIVEL else "abaixo"
         avisos.append(
-            f"**Consumo da BDGD inconsistente.** As horas equivalentes de operação dão "
-            f"{formatar_numero(horas)} h/ano ({formatar_numero(horas / 365, 1)} h/dia), "
-            f"{comparacao} da faixa física da iluminação pública "
-            f"({formatar_numero(HORAS_MIN_PLAUSIVEL)}–"
-            f"{formatar_numero(HORAS_MAX_PLAUSIVEL)} h). Consumo ou carga instalada "
-            "declarados à ANEEL estão errados: **o custo de energia, a cobertura da COSIP "
-            "e a economia potencial não valem para este município.** Número de pontos e "
-            "carga instalada seguem utilizáveis."
+            f"O consumo declarado pela distribuidora é inconsistente "
+            f"({formatar_numero(horas)} h/ano de operação equivalente, fora da faixa "
+            f"física de {formatar_numero(HORAS_MIN_PLAUSIVEL)}–"
+            f"{formatar_numero(HORAS_MAX_PLAUSIVEL)} h). Não afeta a triagem, que não usa "
+            "consumo, mas invalida a leitura de eficiência do parque."
         )
-
-    # `is True` não serve aqui: o pandas devolve numpy.bool_, que não é o singleton True.
-    if bool(linha.get("declaracao_implausivel")):
-        avisos.append(
-            f"**Declaração implausível.** O valor informado ao SICONFI equivale a "
-            f"{formatar_moeda(linha.get('cosip_por_ponto_ano'))} por ponto por ANO — abaixo do "
-            f"piso técnico de {formatar_moeda(PISO_PLAUSIBILIDADE_POR_PONTO)}/ponto/ano. "
-            "Nenhuma lei de COSIP produz isso: trata-se de erro de preenchimento do DCA pelo "
-            "ente (valor em unidade errada ou lançamento equivocado), não de baixa "
-            "arrecadação. Não use este número — busque o balancete municipal."
-        )
-    elif not bool(linha.get("consumo_bdgd_suspeito")):
-        cobertura = linha.get("cobertura_energia")
-        if pd.notna(cobertura) and float(cobertura) < 1.0:
-            avisos.append(
-                "A COSIP arrecadada não cobre sequer o custo estimado de energia. Uma PPP nesse "
-                "ente depende de aporte de recursos ordinários ou de revisão da lei da COSIP."
-            )
 
     return avisos
 
 
+# ── formatação pt-BR ────────────────────────────────────────────────────────
+
 def _br(texto: str) -> str:
-    """Troca o separador americano pelo brasileiro num número já formatado."""
     return texto.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
 
@@ -241,3 +320,9 @@ def formatar_numero(v, casas: int = 0) -> str:
     if v is None or pd.isna(v):
         return "—"
     return _br(f"{float(v):,.{casas}f}")
+
+
+def formatar_percentual(v, casas: int = 1) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return _br(f"{float(v) * 100:,.{casas}f}") + "%"
