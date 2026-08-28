@@ -11,9 +11,9 @@ A conta
     sobra (R$/ponto.mês)                 = arrecadação por ponto − custo da PPP
     sobra (%)                            = sobra ÷ arrecadação por ponto
 
-O **custo da PPP em R$ por ponto por mês** é o único parâmetro financeiro, e é
+O **custo da PPP em R$ por ponto por mês** é o parâmetro que governa a triagem, e é
 informado pelo usuário. Ele substituiu a combinação anterior "tarifa R$/kWh × consumo
-da BDGD", por dois motivos:
+da BDGD" nessa conta, por dois motivos:
 
 1. é o número que o time já usa (R$ 38/ponto.mês na CLP, R$ 32 no estudo da RMBH) e
    que o mercado cota — a mediana dos 181 contratos de PPP assinados é R$ 34,23;
@@ -34,6 +34,17 @@ Classificação de viabilidade
 O corte de arrecadação (R$ 4,5 milhões/ano por padrão) é o mesmo da CLP, e foi
 conferido contra o painel da RMBH: Brumadinho (R$ 4,57 mi) é "Viável"; Caeté
 (R$ 1,88 mi), com sobra por ponto igualmente positiva, é "Viabilizável".
+
+Energia e emissões
+------------------
+A tarifa (R$/kWh) e o fator de emissão do SIN (tCO2/MWh) alimentam um bloco separado:
+custo da conta de luz, economia do retrofit e emissões evitadas. Eles NÃO entram na
+conta da sobra — essa continua em R$/ponto.mês, imune ao consumo declarado.
+
+O consumo é **derivado da carga instalada × horas de operação**, não lido do campo de
+energia da BDGD. Conferência: em Belo Horizonte a derivação dá 55,9 GWh/ano contra
+51,0 GWh declarados (9,6% de diferença, explicada por perdas e pelas horas de
+referência) — próximo o bastante onde o declarado presta, e disponível onde não presta.
 """
 
 from __future__ import annotations
@@ -48,11 +59,6 @@ from . import config, estimativa
 # Corte de arrecadação anual abaixo do qual o projeto não se sustenta sozinho —
 # escala pequena demais para o custo de transação de uma PPP. Da metodologia da CLP.
 CORTE_ARRECADACAO_PADRAO = 4_500_000.0
-
-# Preço de energia usado APENAS para traduzir a economia do retrofit em reais. Não é
-# exposto na interface: o usuário informa o custo da PPP, não a tarifa. R$ 0,72/kWh é
-# a ordem de grandeza da B4a com tributos; a economia é indicativa, não orçamento.
-PRECO_ENERGIA_REFERENCIA = 0.72
 
 # Horas anuais de operação para converter carga em energia. 4.160 h/ano (11,4 h/dia) é
 # o valor medido na BDGD da Cemig-D e coerente com acionamento por relé fotoelétrico.
@@ -89,8 +95,11 @@ COLUNAS_INDICADORES = [
     "contraprestacao_mes", "contraprestacao_ano",
     "sobra_ponto_mes", "sobra_percentual", "sobra_reais_ano",
     # modernização
+    "tarifa_energia", "consumo_estimado_kwh_ano", "custo_energia_ano",
+    "custo_energia_ponto_mes",
     "potencia_futura_w", "economia_percentual", "economia_kwh_ano",
-    "economia_reais_ano",
+    "economia_reais_ano", "consumo_pos_retrofit_kwh_ano",
+    "fator_emissao", "co2_evitado_t_ano",
     # classificação e qualidade do dado
     "viabilidade", "tem_ppp", "concessionaria_ppp", "ano_ppp",
     "declaracao_implausivel", "consumo_bdgd_suspeito",
@@ -116,6 +125,8 @@ def cruzar(
     custo_ppp_ponto_mes: float = config.CUSTO_PPP_PONTO_MES_PADRAO,
     potencia_futura_w: float = config.POTENCIA_FUTURA_PADRAO_W,
     corte_arrecadacao: float = CORTE_ARRECADACAO_PADRAO,
+    tarifa_energia: float = config.TARIFA_ENERGIA_PADRAO,
+    fator_emissao: float = config.FATOR_EMISSAO_SIN_PADRAO,
     estimar_sem_bdgd: bool = True,
 ) -> pd.DataFrame:
     """
@@ -176,16 +187,36 @@ def cruzar(
     df["sobra_percentual"] = df["sobra_ponto_mes"] / df["cosip_ponto_mes"].replace(0, pd.NA)
     df["sobra_reais_ano"] = cosip_liq - df["contraprestacao_ano"]
 
-    # ── modernização do parque ──────────────────────────────────────────────
-    # Usa carga instalada e nº de pontos, que são confiáveis em toda a base — não o
-    # consumo declarado, que não é. A energia é derivada de horas de referência.
+    # ── energia, modernização e emissões ────────────────────────────────────
+    # O consumo é DERIVADO da carga instalada × horas de operação, não lido do campo
+    # de energia da BDGD: aquele campo é inutilizável em um terço dos municípios
+    # (Neoenergia Elektro declara 0 h/ano equivalentes, Copel 13 h, Enel CE 13.415 h),
+    # enquanto carga e nº de pontos são confiáveis em toda a base. Quem quiser
+    # comparar tem `consumo_kwh_ano` (declarado) ao lado de `consumo_estimado_kwh_ano`.
     pot_atual = _numerica(df, "potencia_media_w")
+    carga_kw = _numerica(df, "carga_instalada_kw")
+    # sem carga medida (parque estimado), deriva da potência de referência por ponto
+    carga_kw = carga_kw.fillna(pontos * pot_atual / 1000.0)
+
+    df["tarifa_energia"] = float(tarifa_energia)
+    df["consumo_estimado_kwh_ano"] = carga_kw * HORAS_OPERACAO
+    df["custo_energia_ano"] = df["consumo_estimado_kwh_ano"] * float(tarifa_energia)
+    df["custo_energia_ponto_mes"] = df["custo_energia_ano"] / (pontos_validos * 12.0)
+
     df["potencia_futura_w"] = float(potencia_futura_w)
     df["economia_percentual"] = ((pot_atual - float(potencia_futura_w)) /
                                  pot_atual.replace(0, pd.NA)).clip(lower=0)
     carga_reduzida_kw = (pontos * (pot_atual - float(potencia_futura_w)).clip(lower=0)) / 1000.0
     df["economia_kwh_ano"] = carga_reduzida_kw * HORAS_OPERACAO
-    df["economia_reais_ano"] = df["economia_kwh_ano"] * PRECO_ENERGIA_REFERENCIA
+    df["economia_reais_ano"] = df["economia_kwh_ano"] * float(tarifa_energia)
+    df["consumo_pos_retrofit_kwh_ano"] = (df["consumo_estimado_kwh_ano"]
+                                          - df["economia_kwh_ano"]).clip(lower=0)
+
+    # Emissões evitadas. A matriz elétrica brasileira é predominantemente renovável,
+    # então o ganho ambiental de economizar kWh aqui é modesto em tCO2 — bem menor do
+    # que a mesma economia renderia num país de matriz fóssil. Reportar sem inflar.
+    df["fator_emissao"] = float(fator_emissao)
+    df["co2_evitado_t_ano"] = df["economia_kwh_ano"] / 1000.0 * float(fator_emissao)
 
     # ── qualidade do dado ───────────────────────────────────────────────────
     df["declaracao_implausivel"] = (

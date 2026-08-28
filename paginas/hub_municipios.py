@@ -10,6 +10,8 @@ Esta página é apenas a UI; a lógica vive em `hub_municipios/`.
 from __future__ import annotations
 
 import io
+import traceback
+from contextlib import contextmanager
 from datetime import datetime
 
 import pandas as pd
@@ -146,6 +148,31 @@ def _selo_viabilidade(classe: str) -> str:
             f'font-weight:700;">{classe}</span>')
 
 
+@contextmanager
+def _aba_isolada(nome: str):
+    """
+    Contém uma falha dentro da aba onde ela aconteceu.
+
+    O `st.tabs` executa o conteúdo de TODAS as abas no mesmo ciclo, então qualquer
+    exceção sobe até o entry point e derruba a página inteira — o usuário perde até
+    as abas que estavam funcionando, e a mensagem no Streamlit Cloud vem redigida.
+    Isso já aconteceu duas vezes aqui (escrita em chave de widget já instanciado e
+    dtype recusando ausência), então a proteção é estrutural, não pontual.
+
+    As exceções de controle de fluxo do próprio Streamlit (`st.rerun`, `st.stop`)
+    precisam passar intactas, senão a navegação para de funcionar.
+    """
+    try:
+        yield
+    except Exception as exc:
+        if type(exc).__name__ in ("RerunException", "StopException", "RerunData"):
+            raise
+        st.error(f"**Esta aba falhou.** As demais seguem utilizáveis.\n\n"
+                 f"`{type(exc).__name__}: {exc}`", icon="🚨")
+        with st.expander("Detalhes técnicos"):
+            st.code(traceback.format_exc(), language="text")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CABEÇALHO
 # ═════════════════════════════════════════════════════════════════════════════
@@ -206,13 +233,32 @@ with st.sidebar:
              "COSIP podem viabilizar. A metodologia da CLP usa R$ 4,5 milhões.",
     ) * 1e6
 
-    with st.expander("Modernização do parque"):
+    with st.expander("Energia e modernização"):
         pot_futura = st.number_input(
             "Potência média futura por ponto (W)", min_value=15.0, max_value=250.0,
             value=config.POTENCIA_FUTURA_PADRAO_W, step=5.0,
             help="Potência média por ponto depois da troca das luminárias. Serve para "
                  "estimar quanto de energia o município deixaria de gastar. Faixa de "
                  "mercado após LED: 45 a 75 W em via urbana.",
+        )
+        tarifa = st.number_input(
+            "Tarifa de energia (R$/kWh)", min_value=0.10, max_value=3.00,
+            value=config.TARIFA_ENERGIA_PADRAO, step=0.01, format="%.2f",
+            help="Tarifa B4a com tributos. Usada só no bloco de energia — não entra na "
+                 "conta da sobra da CIP. A tarifa real vem da resolução homologatória da "
+                 "distribuidora e do tratamento de ICMS que o estado dá à iluminação "
+                 "pública; a faixa nacional vai de ~R$ 0,45 a ~R$ 0,95.",
+        )
+        fator_co2 = st.number_input(
+            "Fator de emissão do SIN (tCO₂/MWh)", min_value=0.0, max_value=1.0,
+            value=config.FATOR_EMISSAO_SIN_PADRAO, step=0.0010, format="%.4f",
+            help="Fator MÉDIO de emissão da geração elétrica do SIN, publicado pelo MCTI "
+                 "no SIRENE e adotado pelo Programa Brasileiro GHG Protocol para "
+                 "inventário de escopo 2. Valor de 2024: 0,0545 tCO₂/MWh. Não confundir "
+                 "com o fator da margem de operação (0,02–0,03), que serve a projetos de "
+                 "MDL, não a inventário. Oscila com o despacho térmico: sobe em ano seco. "
+                 "Referência internacional: EUA 0,3674 e Alemanha 0,321 — a matriz "
+                 "brasileira é ~88% renovável.",
         )
 
     st.markdown("---")
@@ -233,7 +279,7 @@ aba_municipio, aba_mapa, aba_carteira, aba_ppp, aba_base = st.tabs(
 # ═════════════════════════════════════════════════════════════════════════════
 # ABA 1 — ficha do município
 # ═════════════════════════════════════════════════════════════════════════════
-with aba_municipio:
+with aba_municipio, _aba_isolada("Município"):
     # Município escolhido no mapa: consumido AQUI, antes de o text_input existir —
     # escrever na chave de um widget já instanciado levanta StreamlitAPIException.
     vindo_do_mapa = st.session_state.pop("hm_do_mapa", None)
@@ -260,7 +306,8 @@ with aba_municipio:
 
     if escolhido:
         painel = indicadores.cruzar(_cosip((escolhido,), tuple(sorted(anos))),
-                                    parque, custo_ppp, pot_futura, corte)
+                                    parque, custo_ppp, pot_futura, corte,
+                                    tarifa, fator_co2)
         if painel.empty:
             st.error("Nenhum dado retornado para este município.")
         else:
@@ -316,24 +363,58 @@ with aba_municipio:
                               "~80 W, LED.")
 
             # ── Modernização ────────────────────────────────────────────────
+            # ── Energia hoje ────────────────────────────────────────────────
+            if pd.notna(r.get("consumo_estimado_kwh_ano")):
+                st.markdown("#### Energia")
+                e = st.columns(4, border=True)
+                e[0].metric("Consumo estimado",
+                            f"{fmt_num(r['consumo_estimado_kwh_ano'] / 1000)} MWh/ano",
+                            help="Carga instalada × 4.160 h/ano de operação. Derivado da "
+                                 "carga, não do campo de energia da BDGD — que é "
+                                 "inconsistente em um terço dos municípios.")
+                e[1].metric("Custo da energia", _compacto(r.get("custo_energia_ano")) + "/ano",
+                            help=f"À tarifa de {fmt_moeda(tarifa)}/kWh informada.")
+                e[2].metric("Custo por ponto.mês",
+                            fmt_moeda(r.get("custo_energia_ponto_mes")),
+                            help="Para comparar com a arrecadação por ponto: é quanto da "
+                                 "CIP a conta de luz consome.")
+                declarado = r.get("consumo_kwh_ano")
+                if pd.notna(declarado) and float(declarado) > 0:
+                    desvio = (r["consumo_estimado_kwh_ano"] - declarado) / declarado
+                    e[3].metric("Consumo declarado à ANEEL",
+                                f"{fmt_num(declarado / 1000)} MWh/ano",
+                                delta=f"{fmt_pct(-desvio)} vs. estimado",
+                                delta_color="off")
+                else:
+                    e[3].metric("Consumo declarado à ANEEL", "—",
+                                help="A distribuidora não declarou consumo utilizável.")
+
+            # ── Modernização e emissões ─────────────────────────────────────
             econ_pct = r.get("economia_percentual")
             if pd.notna(econ_pct) and float(econ_pct) > 0:
                 st.markdown("#### Se o parque fosse modernizado")
-                m = st.columns(3, border=True)
+                m = st.columns(4, border=True)
                 m[0].metric(f"Potência média hoje → {fmt_num(pot_futura)} W",
                             f"{fmt_num(r['potencia_media_w'], 0)} W")
                 m[1].metric("Economia de energia", fmt_pct(econ_pct),
                             help="Redução proporcional da carga instalada.")
-                m[2].metric("Equivale a", _compacto(r.get("economia_reais_ano")) + "/ano",
-                            help="Estimativa indicativa, a preço de energia de "
-                                 "referência. Não é orçamento.")
+                m[2].metric("Economia anual",
+                            _compacto(r.get("economia_reais_ano")),
+                            delta=f"{fmt_num(r.get('economia_kwh_ano', 0) / 1000)} MWh/ano",
+                            delta_color="off")
+                m[3].metric("CO₂ evitado",
+                            f"{fmt_num(r.get('co2_evitado_t_ano'), 1)} t/ano",
+                            help=f"Economia de energia × fator de emissão do SIN "
+                                 f"({fmt_num(fator_co2, 4)} tCO₂/MWh).")
                 st.caption(
-                    f"Trocar as luminárias reduziria a potência média de "
+                    f"Trocar as luminárias levaria a potência média de "
                     f"{fmt_num(r['potencia_media_w'], 0)} W para {fmt_num(pot_futura)} W por "
-                    f"ponto — **{fmt_pct(econ_pct)} menos energia**, cerca de "
-                    f"{fmt_num(r.get('economia_kwh_ano', 0) / 1000)} MWh por ano. "
+                    f"ponto — **{fmt_pct(econ_pct)} menos energia**. "
                     "Estimativa de triagem: não substitui projeto luminotécnico nem "
-                    "considera demanda reprimida."
+                    "considera demanda reprimida. **A redução de CO₂ é modesta por mérito "
+                    "da matriz brasileira**, predominantemente renovável: a mesma economia "
+                    "de kWh num país de matriz fóssil evitaria várias vezes mais emissões. "
+                    "O fator do SIN oscila com o despacho térmico e é publicado pelo MCTI."
                 )
 
             for aviso in indicadores.ressalvas(r):
@@ -411,7 +492,7 @@ with aba_municipio:
 # ═════════════════════════════════════════════════════════════════════════════
 # ABA 2 — mapa
 # ═════════════════════════════════════════════════════════════════════════════
-with aba_mapa:
+with aba_mapa, _aba_isolada("Mapa"):
     if parque.empty or "uf" not in parque.columns:
         st.info("O mapa depende do parque da BDGD. Rode `py -m hub_municipios.etl_bdgd`.")
     else:
@@ -465,7 +546,8 @@ with aba_mapa:
             else:
                 with st.spinner(f"Preparando {len(consultar)} municípios de {uf_mapa}…"):
                     painel_uf = indicadores.cruzar(_cosip(tuple(consultar), (ano_mapa,)),
-                                                   parque, custo_ppp, pot_futura, corte)
+                                                   parque, custo_ppp, pot_futura, corte,
+                                    tarifa, fator_co2)
 
             if painel_uf.empty:
                 st.info(f"Sem dados para {uf_mapa}.")
@@ -532,7 +614,7 @@ with aba_mapa:
 # ═════════════════════════════════════════════════════════════════════════════
 # ABA 3 — carteira
 # ═════════════════════════════════════════════════════════════════════════════
-with aba_carteira:
+with aba_carteira, _aba_isolada("Carteira"):
     st.markdown("**Triagem em lote** — por UF ou por planilha de códigos IBGE.")
     modo = st.radio("Origem", ["Por UF", "Planilha de códigos"], horizontal=True,
                     label_visibility="collapsed", key="hm_modo")
@@ -575,7 +657,8 @@ with aba_carteira:
         ano_foco = st.selectbox("Exercício", sorted(anos, reverse=True), key="hm_ano_foco")
         painel = indicadores.cruzar(
             _cosip(tuple(st.session_state["hm_codigos"]), (ano_foco,)),
-            parque, custo_ppp, pot_futura, corte)
+            parque, custo_ppp, pot_futura, corte,
+                                    tarifa, fator_co2)
 
         resumo = painel["viabilidade"].value_counts()
         cols = st.columns(len(ORDEM_VIABILIDADE), border=True)
@@ -624,7 +707,7 @@ with aba_carteira:
 # ═════════════════════════════════════════════════════════════════════════════
 # ABA 4 — PPPs contratadas
 # ═════════════════════════════════════════════════════════════════════════════
-with aba_ppp:
+with aba_ppp, _aba_isolada("PPPs contratadas"):
     if contratos.empty:
         st.info("Base de PPPs não importada. Rode `py -m hub_municipios._importar_ppp`.")
     else:
@@ -675,7 +758,7 @@ with aba_ppp:
 # ═════════════════════════════════════════════════════════════════════════════
 # ABA 5 — base de dados
 # ═════════════════════════════════════════════════════════════════════════════
-with aba_base:
+with aba_base, _aba_isolada("Base de dados"):
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**SICONFI — DCA Anexo I-C**")

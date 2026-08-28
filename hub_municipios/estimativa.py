@@ -94,21 +94,34 @@ def completar_parque(df: pd.DataFrame, usar_regra_clp: bool = False) -> pd.DataF
 
     Espera as colunas `pontos_ip` e `populacao`. Não toca em nenhum município que já
     tenha parque medido.
+
+    O dtype importa: `pontos_ip` chega como int64 ou float64 conforme o merge, e o
+    pandas 3 recusa gravar ausência (`None`/`pd.NA`) nesses dtypes — levanta
+    `TypeError: Invalid value '[None]' for dtype 'float64'`, que subia até o entry
+    point e derrubava a página INTEIRA do Streamlit. Por isso a coluna é convertida
+    para `Float64` (nullable) antes de qualquer escrita, e os estimados entram como
+    Series alinhada por índice, nunca como lista solta.
     """
     out = df.copy()
     if "pontos_ip" not in out.columns:
         out["pontos_ip"] = pd.NA
 
     medidos = pd.to_numeric(out["pontos_ip"], errors="coerce")
-    out["origem_pontos"] = medidos.notna().map({True: ORIGEM_MEDIDA, False: ORIGEM_ESTIMADA})
+    out["origem_pontos"] = pd.Series(
+        [ORIGEM_MEDIDA if m else ORIGEM_ESTIMADA for m in medidos.notna()],
+        index=out.index, dtype="object")
+
+    out["pontos_ip"] = medidos.astype("Float64")
 
     faltando = medidos.isna()
     if faltando.any() and "populacao" in out.columns:
-        out.loc[faltando, "pontos_ip"] = [
-            estimar_pontos(p, usar_regra_clp) for p in out.loc[faltando, "populacao"]
-        ]
-        # sem população não há estimativa possível: volta a ficar sem origem definida
-        ainda_sem = pd.to_numeric(out["pontos_ip"], errors="coerce").isna()
-        out.loc[ainda_sem, "origem_pontos"] = None
+        estimados = pd.Series(
+            [estimar_pontos(p, usar_regra_clp) for p in out.loc[faltando, "populacao"]],
+            index=out.index[faltando], dtype="Float64")
+        out.loc[faltando, "pontos_ip"] = estimados
 
+    # sem população não há estimativa possível: a origem volta a ser indefinida, em
+    # vez de rotular como "Estimado" uma linha que não tem parque nenhum
+    sem_parque = out["pontos_ip"].isna()
+    out.loc[sem_parque, "origem_pontos"] = None
     return out

@@ -78,6 +78,29 @@ CUSTO_PPP_PONTO_MES_PADRAO = 38.00
 
 POTENCIA_FUTURA_PADRAO_W = 60.0
 
+# Tarifa de energia da iluminação pública (subgrupo B4a), em R$/kWh com tributos.
+# Usada SÓ para o bloco de energia: custo da conta de luz, economia do retrofit e
+# emissões evitadas. NÃO entra na conta da sobra da CIP, que trabalha em R$/ponto.mês.
+# A tarifa real vem da resolução homologatória da distribuidora e do tratamento de
+# ICMS que o estado dá à IP; a faixa nacional vai de ~R$ 0,45 a ~R$ 0,95.
+TARIFA_ENERGIA_PADRAO = 0.72
+
+# Fator MÉDIO de emissão de CO2 da geração elétrica do SIN, em tCO2 por MWh.
+#
+# É o fator de "inventários corporativos" publicado pelo MCTI no SIRENE — o mesmo que
+# o Programa Brasileiro GHG Protocol adota para inventário de escopo 2. Valor de 2024:
+# 0,0545 tCO2/MWh.
+#
+# NÃO confundir com o fator da MARGEM DE OPERAÇÃO, também publicado pelo MCTI e bem
+# menor (0,0215 a 0,0289 tCO2/MWh nos primeiros meses de 2025). Aquele serve a projetos
+# de MDL/crédito de carbono; este, a inventário corporativo — que é o caso de uso aqui.
+#
+# O valor oscila com o despacho térmico: sobe em ano hidrológico seco e cai em ano
+# chuvoso. Para dimensionar a ordem de grandeza: 0,0545 no Brasil contra 0,3674 nos
+# Estados Unidos e 0,321 na Alemanha. A matriz brasileira é ~88% renovável, então a
+# mesma economia de kWh evita aqui cerca de um sexto das emissões que evitaria lá.
+FATOR_EMISSAO_SIN_PADRAO = 0.0545
+
 # Horas de operação anuais observadas na BDGD da Cemig-D (2024): 4.160 h/ano,
 # ou 11,4 h/dia — coerente com acionamento por relé fotoelétrico. Usada apenas nas
 # checagens de consistência do dado da distribuidora, não nos indicadores.
