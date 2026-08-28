@@ -1,0 +1,22 @@
+# Tema da Plataforma Houer.
+#
+# Por que este arquivo existe: localmente o app é iniciado com
+# `--theme.base "dark"` (ver iniciar_app.bat), mas o Streamlit Cloud não recebe
+# argumentos de CLI. Sem esta configuração, o app publicado renderiza os componentes
+# no tema claro enquanto o CSS de app.py continua pintando o fundo de escuro — o
+# resultado é um híbrido com texto claro sobre campo branco. As cores abaixo são as
+# mesmas que app.py já injeta, então isto apenas replica no deploy o comportamento
+# que já existe localmente.
+#
+# `primaryColor` é deliberadamente omitido para não alterar a cor dos controles nos
+# módulos existentes (Simulação NBR, Análise de Cadastro, Planilha de Engenharia).
+
+[theme]
+base = "dark"
+backgroundColor = "#0b111e"
+secondaryBackgroundColor = "#12192b"
+textColor = "#f8fafc"
+
+[server]
+# planilhas de cadastro e BDGD passam folgadamente de 200 MB no upload
+maxUploadSize = 400
