@@ -261,11 +261,26 @@ with st.sidebar:
                  "brasileira é ~88% renovável.",
         )
 
-    st.markdown("---")
-    st.caption(
-        f"**{len(parque):,}** municípios com parque medido na BDGD  ·  "
-        f"**{len(contratos)}** PPPs de IP contratadas".replace(",", ".")
+    usar_estimativa = st.toggle(
+        "Estimar parque onde falta BDGD", value=True, key="hm_estimar",
+        help="Ligado: municípios sem base da distribuidora recebem parque estimado pela "
+             "população, SEMPRE marcados como “Estimado”. Desligado: só aparece parque "
+             "medido, e quem não tem BDGD fica sem indicador por ponto. A estimativa "
+             "nunca substitui dado medido — ela só preenche o que está vazio.",
     )
+
+    st.markdown("---")
+    st.markdown("##### 🗄️ Dados carregados")
+    st.caption(
+        f"BDGD: **{len(parque):,}** municípios · "
+        f"**{parque['distribuidora'].nunique()}** distribuidoras\n\n"
+        f"PPPs contratadas: **{len(contratos)}**".replace(",", ".")
+    )
+    if len(parque) < 5000:
+        st.warning(
+            f"Só **{len(parque)}** municípios carregados — o esperado é 5.417. O app está "
+            "rodando uma versão antiga dos dados. Se for o app publicado, force o rebuild "
+            "em *Manage app → Reboot*.", icon="⚠️")
 
 if not anos:
     st.info("Selecione ao menos um exercício na barra lateral.")
@@ -307,7 +322,8 @@ with aba_municipio, _aba_isolada("Município"):
     if escolhido:
         painel = indicadores.cruzar(_cosip((escolhido,), tuple(sorted(anos))),
                                     parque, custo_ppp, pot_futura, corte,
-                                    tarifa, fator_co2)
+                                    tarifa, fator_co2,
+                                    estimar_sem_bdgd=usar_estimativa)
         if painel.empty:
             st.error("Nenhum dado retornado para este município.")
         else:
@@ -347,9 +363,17 @@ with aba_municipio, _aba_isolada("Município"):
                              "contraprestação da PPP.")
 
             k2 = st.columns(4, border=True)
-            k2[0].metric("Pontos de IP", fmt_num(r.get("pontos_ip")),
-                         help=("Medido na BDGD" if origem == estimativa.ORIGEM_MEDIDA
-                               else "Estimado pela população — não medido"))
+            # A origem vai no PRÓPRIO rótulo do indicador, não escondida no tooltip:
+            # dado medido e dado inferido não podem se confundir de relance.
+            medido = origem == estimativa.ORIGEM_MEDIDA
+            k2[0].metric(
+                "Pontos de IP · BDGD" if medido else "Pontos de IP · ESTIMADO",
+                fmt_num(r.get("pontos_ip")),
+                help=(f"Medido na BDGD da {r.get('distribuidora')}, base "
+                      f"{int(r['ano_base_bdgd'])}." if medido else
+                      "Estimado pela população — este município não tem BDGD "
+                      "processada. Desligue a estimativa na barra lateral para ver "
+                      "apenas dado medido."))
             k2[1].metric("Contraprestação estimada", _compacto(r.get("contraprestacao_mes")),
                          help="pontos × custo da PPP, por mês")
             k2[2].metric("Sobra anual", _compacto(r.get("sobra_reais_ano")),
@@ -547,7 +571,8 @@ with aba_mapa, _aba_isolada("Mapa"):
                 with st.spinner(f"Preparando {len(consultar)} municípios de {uf_mapa}…"):
                     painel_uf = indicadores.cruzar(_cosip(tuple(consultar), (ano_mapa,)),
                                                    parque, custo_ppp, pot_futura, corte,
-                                    tarifa, fator_co2)
+                                    tarifa, fator_co2,
+                                    estimar_sem_bdgd=usar_estimativa)
 
             if painel_uf.empty:
                 st.info(f"Sem dados para {uf_mapa}.")
@@ -658,7 +683,8 @@ with aba_carteira, _aba_isolada("Carteira"):
         painel = indicadores.cruzar(
             _cosip(tuple(st.session_state["hm_codigos"]), (ano_foco,)),
             parque, custo_ppp, pot_futura, corte,
-                                    tarifa, fator_co2)
+                                    tarifa, fator_co2,
+                                    estimar_sem_bdgd=usar_estimativa)
 
         resumo = painel["viabilidade"].value_counts()
         cols = st.columns(len(ORDEM_VIABILIDADE), border=True)
