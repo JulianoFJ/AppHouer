@@ -47,6 +47,20 @@ APPS_CARDS = [
         ),
         "tags": ["DTO + Planilhas", "Fórmulas vivas", "Inputs IP", "Relatório"],
     },
+    {
+        "page_url": "municipios",
+        "page_file": "paginas/hub_municipios.py",
+        "icon": "🌎",
+        "title": "Hub de Municípios",
+        "subtitle": "COSIP × parque de IP — triagem nacional",
+        "description": (
+            "Cruza a receita de COSIP declarada ao SICONFI com o parque de iluminação "
+            "pública da BDGD/ANEEL e devolve os indicadores de triagem: R$ por ponto, "
+            "R$ por habitante, cobertura do custo de energia e potencial de "
+            "eficientização. Consulta individual, por UF ou por planilha."
+        ),
+        "tags": ["SICONFI/DCA", "BDGD/ANEEL", "R$/ponto", "Cobertura"],
+    },
 ]
 
 

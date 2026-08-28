@@ -8,3 +8,8 @@ streamlit>=1.30.0
 plotly>=5.18.0
 geopy>=2.4.0
 fpdf2>=2.8.0
+
+# Hub de Municípios — consulta ao SICONFI e leitura dos agregados da BDGD.
+# Ambas são dependências puras (wheels padrão) e não afetam os demais módulos.
+requests>=2.31.0
+pyarrow>=14.0.0

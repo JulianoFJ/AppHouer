@@ -74,6 +74,7 @@ PAGINAS = [
     st.Page(str(BASE / "simulacao_nbr.py"),     title="Simulação NBR 5101", icon="💡", url_path="simulacao"),
     st.Page(str(BASE / "analise_cadastro.py"),  title="Análise de Cadastro", icon="🗂️", url_path="cadastro"),
     st.Page(str(BASE / "premissas_ip.py"),      title="Planilha de Engenharia IP", icon="🧮", url_path="premissas"),
+    st.Page(str(BASE / "hub_municipios.py"),    title="Hub de Municípios",  icon="🌎", url_path="municipios"),
 ]
 
 pg = st.navigation({"Houer": PAGINAS}, position="sidebar")

@@ -1,0 +1,20 @@
+# Dependências do ETL OFFLINE da BDGD (app/hub_municipios/etl_bdgd.py).
+#
+# NÃO instale isto para rodar o portal: o Streamlit lê apenas o agregado municipal
+# já processado. Este arquivo existe para manter a ingestão de geodados isolada do
+# requirements.txt da plataforma.
+#
+# Requisito EXTERNO, não instalável por pip:
+#   GDAL com os executáveis `ogr2ogr` e `ogrinfo` no PATH.
+#   Windows : OSGeo4W (https://qgis.org/download) ou QGIS — o ETL detecta
+#             C:\OSGeo4W\bin e C:\Program Files\QGIS*\bin automaticamente.
+#             Aponte a variável OGR2OGR para o executável se estiver em outro lugar.
+#   Linux   : apt install gdal-bin
+#
+# Observação: `pyogrio`/`geopandas` fariam a leitura direto do Python, mas nesta
+# máquina o Smart App Control do Windows bloqueia a DLL do GDAL empacotada na wheel
+# ("Uma política de Controle de Aplicativo bloqueou este arquivo"). Chamar o
+# executável contorna o bloqueio e evita a dependência binária.
+
+pandas>=2.0.0
+pyarrow>=14.0.0
