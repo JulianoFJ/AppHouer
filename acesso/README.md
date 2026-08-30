@@ -6,7 +6,7 @@ informação inútil que existia antes deste pacote.
 
 ## O que ele protege, e o que não protege
 
-Protege o **portal**: as cinco ferramentas, os dados que elas carregam em memória e os
+Protege o **portal**: as ferramentas ativas, os dados que elas carregam em memória e os
 entregáveis que elas geram.
 
 **Não protege os arquivos do repositório.** Modelos `.pkl`, `dataset.csv`, planilhas de
@@ -81,10 +81,32 @@ modo que o CSV dura dias, não meses. Para rodar só na sua máquina, pode pular
 4. **Gerar uma chave JSON** para a service account (*Keys → Add key → JSON*).
 5. **Compartilhar a planilha** com o `client_email` do JSON, como **Editor**. Este é o
    passo que se esquece: sem ele a API responde 403 e o log cai para CSV em silêncio.
-6. **Colar no secrets** o conteúdo do JSON sob `[gcp_service_account]` e o id sob
-   `[log_uso]` — ver `app/.streamlit/secrets.toml.example`.
+6. **Converter o JSON para o formato do painel** — não faça à mão. A chave privada é uma
+   string longa com as quebras de linha escritas como barra-invertida-n; copiada errada,
+   o secrets fica sintaticamente válido e a autenticação falha **em silêncio**, com o log
+   caindo para CSV sem avisar ninguém. Use:
 
-Confira em qual backend está com `acesso.backend_ativo()`.
+   ```bash
+   cd app
+   py -m acesso.configurar_sheets --json chave.json --planilha "<URL da planilha>"
+   ```
+
+   O comando aceita a URL inteira (recorta o id sozinho), imprime o bloco pronto e
+   destaca o `client_email` do passo 5.
+
+7. **Validar de verdade**, com `--testar` no mesmo comando: ele autentica, escreve uma
+   linha na aba e a apaga. É o único jeito de descobrir agora — e não daqui a um mês —
+   que faltou compartilhar a planilha. Falhas comuns e o que significam:
+
+   | Sintoma | Causa |
+   |---|---|
+   | `403` ao abrir a planilha | não foi compartilhada com o `client_email` |
+   | `SpreadsheetNotFound` | id errado, ou planilha em outra conta |
+   | abre mas não escreve | a service account entrou como Leitor, não Editor |
+   | `API has not been used` | a Google Sheets API não foi habilitada no projeto |
+
+Confira em qual backend está com `acesso.backend_ativo()` — a aba **Trilha de uso** da
+página de administração mostra isso no topo.
 
 ---
 
@@ -102,8 +124,10 @@ Uma linha por evento, com estas colunas:
 | `alvo` | objeto da ação: município, nº de pontos, página |
 | `detalhe` | parâmetro relevante (código IBGE, tamanho do arquivo) |
 
-Ações instrumentadas hoje: `cadastro_processado`, `inputs_gerados`,
-`blocos_relatorio_gerados`, `municipio_consultado`, `carteira_triada`.
+Ações instrumentadas hoje: `cadastro_processado`, `municipio_consultado`,
+`carteira_triada`, `credencial_emitida`. Existem também `inputs_gerados` e
+`blocos_relatorio_gerados`, que só voltam a aparecer quando a Planilha de Engenharia IP
+for reativada no menu (desativada em 30/08/2026).
 
 **Duração de sessão.** Não existe evento de saída confiável — o usuário fecha a aba e o
 servidor não fica sabendo. Em vez de um heartbeat que poluiria o log, a duração é
