@@ -33,20 +33,24 @@ APPS_CARDS = [
         ),
         "tags": ["Cadastro", "Inspeção", "IAE/ID", "ANEEL 2590/2019"],
     },
-    {
-        "page_url": "premissas",
-        "page_file": "paginas/premissas_ip.py",
-        "icon": "🧮",
-        "title": "Planilha de Engenharia IP",
-        "subtitle": "Premissas → inputs parametrizados + relatório",
-        "description": (
-            "Coleta as premissas do município e as proposições (IAE, ID, demanda "
-            "reprimida, marcos, prazo). Importa DTO e planilhas (Extrapolação, "
-            "Proposição IAE, InvBens) para auto-preencher e gera a planilha de inputs "
-            "parametrizada por fórmulas + os blocos do relatório de engenharia."
-        ),
-        "tags": ["DTO + Planilhas", "Fórmulas vivas", "Inputs IP", "Relatório"],
-    },
+    # ── DESATIVADO temporariamente em 30/08/2026 ─────────────────────────────
+    # Card da Planilha de Engenharia IP. Ele precisa voltar JUNTO com o registro da
+    # página em `app.py` (procure por "Desativado temporariamente" lá): `st.page_link`
+    # para uma página fora de `st.navigation` derruba a home inteira.
+    # {
+    #     "page_url": "premissas",
+    #     "page_file": "paginas/premissas_ip.py",
+    #     "icon": "🧮",
+    #     "title": "Planilha de Engenharia IP",
+    #     "subtitle": "Premissas → inputs parametrizados + relatório",
+    #     "description": (
+    #         "Coleta as premissas do município e as proposições (IAE, ID, demanda "
+    #         "reprimida, marcos, prazo). Importa DTO e planilhas (Extrapolação, "
+    #         "Proposição IAE, InvBens) para auto-preencher e gera a planilha de inputs "
+    #         "parametrizada por fórmulas + os blocos do relatório de engenharia."
+    #     ),
+    #     "tags": ["DTO + Planilhas", "Fórmulas vivas", "Inputs IP", "Relatório"],
+    # },
     {
         "page_url": "municipios",
         "page_file": "paginas/hub_municipios.py",

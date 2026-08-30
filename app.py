@@ -84,9 +84,19 @@ PAGINAS = [
     st.Page(str(BASE / "home.py"),              title="Início",             icon="🏠", default=True, url_path="home"),
     st.Page(str(BASE / "simulacao_nbr.py"),     title="Simulação NBR 5101", icon="💡", url_path="simulacao"),
     st.Page(str(BASE / "analise_cadastro.py"),  title="Análise de Cadastro", icon="🗂️", url_path="cadastro"),
-    st.Page(str(BASE / "premissas_ip.py"),      title="Planilha de Engenharia IP", icon="🧮", url_path="premissas"),
     st.Page(str(BASE / "hub_municipios.py"),    title="Hub de Municípios",  icon="🌎", url_path="municipios"),
 ]
+
+# ── Desativado temporariamente em 30/08/2026 ─────────────────────────────────
+# A Planilha de Engenharia IP saiu do menu a pedido do usuário. NADA foi removido:
+# `paginas/premissas_ip.py`, o pacote `premissas_ip/` e os testes seguem intactos.
+# Para reativar, basta descomentar a linha abaixo e o card correspondente em
+# `paginas/home.py` (procure por "DESATIVADO" lá) — os dois precisam voltar juntos,
+# porque `st.page_link` para uma página não registrada quebra a home.
+#
+# PAGINAS.insert(3, st.Page(str(BASE / "premissas_ip.py"),
+#                           title="Planilha de Engenharia IP", icon="🧮",
+#                           url_path="premissas"))
 
 # A administração de acessos é registrada só para admin — a própria página revalida o
 # perfil, porque a navegação do Streamlit é por URL e `/administracao` é adivinhável.
