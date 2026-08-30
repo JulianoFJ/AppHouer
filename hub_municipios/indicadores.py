@@ -41,10 +41,22 @@ A tarifa (R$/kWh) e o fator de emissão do SIN (tCO2/MWh) alimentam um bloco sep
 custo da conta de luz, economia do retrofit e emissões evitadas. Eles NÃO entram na
 conta da sobra — essa continua em R$/ponto.mês, imune ao consumo declarado.
 
-O consumo é **derivado da carga instalada × horas de operação**, não lido do campo de
-energia da BDGD. Conferência: em Belo Horizonte a derivação dá 55,9 GWh/ano contra
-51,0 GWh declarados (9,6% de diferença, explicada por perdas e pelas horas de
-referência) — próximo o bastante onde o declarado presta, e disponível onde não presta.
+A base de consumo é o **declarado à ANEEL** sempre que ele for plausível (3.000–5.000 h
+equivalentes), caindo para carga × horas onde não for — o campo de energia da BDGD é
+inutilizável em um terço dos municípios. `origem_consumo` diz qual dos dois valeu.
+
+A tarifa é o **R$/kWh faturado, com tributos**, não a da resolução homologatória. Ver
+`config.TARIFA_ENERGIA_PADRAO`: confundir as duas subestima o custo em ~30%.
+
+Anual × ciclo
+-------------
+`economia_reais_ano` é o ano 1 em reais constantes. `economia_ciclo_reais` é o
+acumulado NOMINAL do prazo, pela soma da série geométrica (`fator_acumulado`) — que é
+o número comparável a um EVTE. Multiplicar o anual pelo prazo subestima em 36% num
+ciclo de 22 anos a 4% a.a.
+
+Quando a potência média por ponto está fora da faixa física (`potencia_implausivel`),
+TODO o bloco de energia sai como nulo. São 1.295 municípios, quase um quarto da base.
 """
 
 from __future__ import annotations
@@ -74,6 +86,13 @@ PISO_PLAUSIBILIDADE_POR_PONTO = 12.0
 # sinalizado porque invalida a leitura de eficiência do parque.
 HORAS_MIN_PLAUSIVEL, HORAS_MAX_PLAUSIVEL = 3000.0, 5000.0
 
+# Faixa física da potência média por ponto. Fora dela, o bloco de energia é suprimido.
+POTENCIA_MIN_PLAUSIVEL_W = config.POTENCIA_MIN_PLAUSIVEL_W
+POTENCIA_MAX_PLAUSIVEL_W = config.POTENCIA_MAX_PLAUSIVEL_W
+
+ORIGEM_CONSUMO_DECLARADO = "Declarado à ANEEL"
+ORIGEM_CONSUMO_DERIVADO = "Derivado da carga"
+
 VIABILIDADE_JA_TEM_PPP = "Já possui PPP"
 VIABILIDADE_VIAVEL = "Viável"
 VIABILIDADE_VIABILIZAVEL = "Viabilizável"
@@ -95,15 +114,70 @@ COLUNAS_INDICADORES = [
     "contraprestacao_mes", "contraprestacao_ano",
     "sobra_ponto_mes", "sobra_percentual", "sobra_reais_ano",
     # modernização
-    "tarifa_energia", "consumo_estimado_kwh_ano", "custo_energia_ano",
+    "tarifa_energia", "consumo_estimado_kwh_ano", "origem_consumo", "custo_energia_ano",
     "custo_energia_ponto_mes",
     "potencia_futura_w", "economia_percentual", "economia_kwh_ano",
     "economia_reais_ano", "consumo_pos_retrofit_kwh_ano",
+    "prazo_concessao_anos", "reajuste_anual", "economia_ciclo_reais",
+    "custo_energia_ciclo_reais",
     "fator_emissao", "co2_evitado_t_ano",
     # classificação e qualidade do dado
     "viabilidade", "tem_ppp", "concessionaria_ppp", "ano_ppp",
-    "declaracao_implausivel", "consumo_bdgd_suspeito",
+    "declaracao_implausivel", "consumo_bdgd_suspeito", "potencia_implausivel",
 ]
+
+
+def fator_acumulado(prazo_anos: int, reajuste: float) -> float:
+    """
+    Fator que converte um valor ANUAL do ano 1 em acumulado NOMINAL do ciclo.
+
+    É a soma da série geométrica Σ (1+r)^(k-1), k=1..n — não `n`. A diferença não é
+    detalhe: 22 anos a 4% a.a. dão 34,25, ou seja, multiplicar pelo prazo subestima o
+    acumulado em 36%. Foi o que separou os R$ 8,73 mi da plataforma dos R$ 17 mi do
+    modelo econômico-financeiro de Matozinhos, junto com a tarifa faturada.
+
+    Com reajuste zero degenera para o prazo, que é o comportamento esperado.
+    """
+    n = int(prazo_anos)
+    r = float(reajuste)
+    if n <= 0:
+        return 0.0
+    if abs(r) < 1e-12:
+        return float(n)
+    return ((1.0 + r) ** n - 1.0) / r
+
+
+def _consumo_base(df: pd.DataFrame, carga_kw: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """
+    Base de consumo anual, em kWh, e a origem dela.
+
+    Prioridade ao **consumo declarado à ANEEL** pela distribuidora, que é medição e não
+    modelo — mas só quando ele é fisicamente plausível, aferido pelas horas equivalentes
+    (consumo ÷ carga) na faixa de 3.000–5.000 h/ano. Quando não é, cai para
+    carga × HORAS_OPERACAO.
+
+    O fallback existe porque o campo de energia da BDGD é inutilizável em um terço dos
+    municípios: Neoenergia Elektro declara 0 h/ano equivalentes, Copel 13 h, Enel CE
+    13.415 h. Onde o declarado presta, ele ganha — em São José da Lapa são 1.274 MWh
+    medidos contra 1.127 MWh derivados, 11,5% de diferença que ia toda para a economia.
+    """
+    declarado = _numerica(df, "consumo_kwh_ano")
+    derivado = carga_kw * HORAS_OPERACAO
+
+    # As horas são RECALCULADAS de consumo ÷ carga, não lidas da coluna. A coluna vem do
+    # ETL e pode estar dessincronizada do consumo desta linha; a razão calculada aqui é
+    # sempre coerente com os dois números que de fato entram na conta.
+    horas = declarado / carga_kw.replace(0, pd.NA)
+    horas = horas.fillna(_numerica(df, "horas_equivalentes_ano"))
+
+    presta = (declarado.notna() & (declarado > 0)
+              & horas.notna() & horas.between(HORAS_MIN_PLAUSIVEL, HORAS_MAX_PLAUSIVEL))
+
+    consumo = derivado.where(~presta, declarado)
+    origem = pd.Series(ORIGEM_CONSUMO_DERIVADO, index=df.index, dtype="object")
+    origem[presta] = ORIGEM_CONSUMO_DECLARADO
+    origem[consumo.isna()] = None
+    return consumo, origem
 
 
 def _numerica(df: pd.DataFrame, coluna: str) -> pd.Series:
@@ -127,6 +201,8 @@ def cruzar(
     corte_arrecadacao: float = CORTE_ARRECADACAO_PADRAO,
     tarifa_energia: float = config.TARIFA_ENERGIA_PADRAO,
     fator_emissao: float = config.FATOR_EMISSAO_SIN_PADRAO,
+    prazo_concessao_anos: int = config.PRAZO_CONCESSAO_ANOS_PADRAO,
+    reajuste_anual: float = config.REAJUSTE_ANUAL_PADRAO,
     estimar_sem_bdgd: bool = True,
 ) -> pd.DataFrame:
     """
@@ -188,35 +264,58 @@ def cruzar(
     df["sobra_reais_ano"] = cosip_liq - df["contraprestacao_ano"]
 
     # ── energia, modernização e emissões ────────────────────────────────────
-    # O consumo é DERIVADO da carga instalada × horas de operação, não lido do campo
-    # de energia da BDGD: aquele campo é inutilizável em um terço dos municípios
-    # (Neoenergia Elektro declara 0 h/ano equivalentes, Copel 13 h, Enel CE 13.415 h),
-    # enquanto carga e nº de pontos são confiáveis em toda a base. Quem quiser
-    # comparar tem `consumo_kwh_ano` (declarado) ao lado de `consumo_estimado_kwh_ano`.
     pot_atual = _numerica(df, "potencia_media_w")
     carga_kw = _numerica(df, "carga_instalada_kw")
     # sem carga medida (parque estimado), deriva da potência de referência por ponto
     carga_kw = carga_kw.fillna(pontos * pot_atual / 1000.0)
 
+    # A potência média por ponto só é utilizável dentro da faixa física. Fora dela o
+    # bloco de energia inteiro é suprimido — ver POTENCIA_*_PLAUSIVEL_W no config.
+    df["potencia_implausivel"] = pot_atual.notna() & ~pot_atual.between(
+        POTENCIA_MIN_PLAUSIVEL_W, POTENCIA_MAX_PLAUSIVEL_W)
+    utilizavel = ~df["potencia_implausivel"]
+
+    df["consumo_estimado_kwh_ano"], df["origem_consumo"] = _consumo_base(df, carga_kw)
+
     df["tarifa_energia"] = float(tarifa_energia)
-    df["consumo_estimado_kwh_ano"] = carga_kw * HORAS_OPERACAO
     df["custo_energia_ano"] = df["consumo_estimado_kwh_ano"] * float(tarifa_energia)
     df["custo_energia_ponto_mes"] = df["custo_energia_ano"] / (pontos_validos * 12.0)
 
+    # A economia é a redução PROPORCIONAL da potência média do município, aplicada à
+    # base de consumo. Vale para o parque inteiro, não para um recorte de tecnologia:
+    # a decisão é do usuário e está registrada — recortar por "só o que não é LED"
+    # seria premissa nova, e premissa nova não entra sem pedido.
     df["potencia_futura_w"] = float(potencia_futura_w)
     df["economia_percentual"] = ((pot_atual - float(potencia_futura_w)) /
                                  pot_atual.replace(0, pd.NA)).clip(lower=0)
-    carga_reduzida_kw = (pontos * (pot_atual - float(potencia_futura_w)).clip(lower=0)) / 1000.0
-    df["economia_kwh_ano"] = carga_reduzida_kw * HORAS_OPERACAO
+    df["economia_kwh_ano"] = df["consumo_estimado_kwh_ano"] * df["economia_percentual"]
     df["economia_reais_ano"] = df["economia_kwh_ano"] * float(tarifa_energia)
     df["consumo_pos_retrofit_kwh_ano"] = (df["consumo_estimado_kwh_ano"]
                                           - df["economia_kwh_ano"]).clip(lower=0)
+
+    # Acumulado do ciclo, NOMINAL e reajustado — o número que conversa com o EVTE.
+    # Soma da série geométrica, não anual × prazo (ver config.PRAZO_CONCESSAO_*).
+    df["prazo_concessao_anos"] = int(prazo_concessao_anos)
+    df["reajuste_anual"] = float(reajuste_anual)
+    df["economia_ciclo_reais"] = df["economia_reais_ano"] * fator_acumulado(
+        prazo_concessao_anos, reajuste_anual)
+    df["custo_energia_ciclo_reais"] = df["custo_energia_ano"] * fator_acumulado(
+        prazo_concessao_anos, reajuste_anual)
 
     # Emissões evitadas. A matriz elétrica brasileira é predominantemente renovável,
     # então o ganho ambiental de economizar kWh aqui é modesto em tCO2 — bem menor do
     # que a mesma economia renderia num país de matriz fóssil. Reportar sem inflar.
     df["fator_emissao"] = float(fator_emissao)
     df["co2_evitado_t_ano"] = df["economia_kwh_ano"] / 1000.0 * float(fator_emissao)
+
+    # Potência implausível contamina TODO o bloco derivado dela. Zerar só a economia
+    # deixaria a conta de luz errada na tela, que é pior do que não mostrar nada.
+    for col in ("consumo_estimado_kwh_ano", "custo_energia_ano", "custo_energia_ponto_mes",
+                "economia_percentual", "economia_kwh_ano", "economia_reais_ano",
+                "consumo_pos_retrofit_kwh_ano", "economia_ciclo_reais",
+                "custo_energia_ciclo_reais", "co2_evitado_t_ano"):
+        df[col] = df[col].where(utilizavel)
+    df.loc[~utilizavel, "origem_consumo"] = None
 
     # ── qualidade do dado ───────────────────────────────────────────────────
     df["declaracao_implausivel"] = (
@@ -322,14 +421,26 @@ def ressalvas(linha: pd.Series) -> list[str]:
             f"{int(linha['ano_base_bdgd'])} — {abs(int(defasagem))} anos de defasagem."
         )
 
-    if bool(linha.get("consumo_bdgd_suspeito")):
+    if bool(linha.get("potencia_implausivel")):
+        avisos.append(
+            f"**Parque com potência fisicamente impossível.** A distribuidora "
+            f"({linha.get('distribuidora') or 'não identificada'}) declara "
+            f"{formatar_numero(linha.get('potencia_media_w'))} W por ponto, fora da faixa "
+            f"de {formatar_numero(POTENCIA_MIN_PLAUSIVEL_W)}–"
+            f"{formatar_numero(POTENCIA_MAX_PLAUSIVEL_W)} W. A carga instalada da base "
+            "está inflada por um fator de escala, então o bloco de energia inteiro foi "
+            "suprimido. Contagem de pontos e arrecadação seguem válidas."
+        )
+
+    elif bool(linha.get("consumo_bdgd_suspeito")):
         horas = float(linha.get("horas_equivalentes_ano"))
         avisos.append(
             f"O consumo declarado pela distribuidora é inconsistente "
             f"({formatar_numero(horas)} h/ano de operação equivalente, fora da faixa "
             f"física de {formatar_numero(HORAS_MIN_PLAUSIVEL)}–"
             f"{formatar_numero(HORAS_MAX_PLAUSIVEL)} h). Não afeta a triagem, que não usa "
-            "consumo, mas invalida a leitura de eficiência do parque."
+            "consumo; o bloco de energia caiu para a carga instalada × "
+            f"{formatar_numero(HORAS_OPERACAO)} h/ano de referência."
         )
 
     return avisos

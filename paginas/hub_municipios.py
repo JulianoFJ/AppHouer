@@ -18,7 +18,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from hub_municipios import bdgd, config, estimativa, indicadores, malhas, ppp, siconfi
+from hub_municipios import (aneel_tarifas, bdgd, config, estimativa, indicadores,
+                            malhas, ppp, siconfi)
 
 # ── Paleta ───────────────────────────────────────────────────────────────────
 # Viabilidade é uma escala de decisão, não uma identidade arbitrária: cada classe
@@ -242,13 +243,30 @@ with st.sidebar:
                  "mercado após LED: 45 a 75 W em via urbana.",
         )
         tarifa = st.number_input(
-            "Tarifa de energia (R$/kWh)", min_value=0.10, max_value=3.00,
+            "Tarifa faturada (R$/kWh, com tributos)", min_value=0.10, max_value=3.00,
             value=config.TARIFA_ENERGIA_PADRAO, step=0.01, format="%.2f",
-            help="Tarifa B4a com tributos. Usada só no bloco de energia — não entra na "
-                 "conta da sobra da CIP. A tarifa real vem da resolução homologatória da "
-                 "distribuidora e do tratamento de ICMS que o estado dá à iluminação "
-                 "pública; a faixa nacional vai de ~R$ 0,45 a ~R$ 0,95.",
+            help="**É o R$/kWh efetivamente pago: total da fatura ÷ kWh faturado.** "
+                 "NÃO é a tarifa da resolução homologatória — a REH publica TUSD+TE sem "
+                 "tributos, e a diferença é grande: a Cemig B4a sai a ~R$ 0,39/kWh na REH "
+                 "e a ~R$ 0,51/kWh faturado, depois de PIS/COFINS e ICMS. Usar a da REH "
+                 "aqui subestima o custo de energia em ~30%. Na aba Município este campo "
+                 "é preenchido automaticamente com a tarifa da distribuidora, quando o "
+                 "ETL da ANEEL já rodou. Faixa nacional: ~R$ 0,45 a ~R$ 0,95.",
         )
+        prazo_ciclo = st.number_input(
+            "Prazo da concessão (anos)", min_value=1, max_value=40,
+            value=config.PRAZO_CONCESSAO_ANOS_PADRAO, step=1,
+            help="Usado só para o acumulado do ciclo, ao lado do valor anual.",
+        )
+        reajuste = st.number_input(
+            "Reajuste anual da tarifa (% a.a.)", min_value=0.0, max_value=20.0,
+            value=config.REAJUSTE_ANUAL_PADRAO * 100, step=0.5, format="%.1f",
+            help="O acumulado do ciclo é NOMINAL: soma da série geométrica, não o valor "
+                 "anual multiplicado pelo prazo. A 4% a.a. em 22 anos o fator é 34,25, "
+                 "não 22 — multiplicar pelo prazo subestima em 36%. É essa diferença, "
+                 "somada à tarifa faturada, que reconcilia a triagem com um EVTE. "
+                 "Zero deixa o acumulado em reais constantes.",
+        ) / 100.0
         fator_co2 = st.number_input(
             "Fator de emissão do SIN (tCO₂/MWh)", min_value=0.0, max_value=1.0,
             value=config.FATOR_EMISSAO_SIN_PADRAO, step=0.0010, format="%.4f",
@@ -320,9 +338,42 @@ with aba_municipio, _aba_isolada("Município"):
             escolhido = opcoes[rotulo]
 
     if escolhido:
+        # Tarifa da distribuidora que atende ESTE município (ETL da ANEEL). Fica na aba,
+        # não na barra lateral, porque só existe depois de o município ser escolhido.
+        tarifa_mun = tarifa
+        ref = aneel_tarifas.tarifa_do_municipio(escolhido, parque)
+        if ref and ref.get("tarifa_com_tributos"):
+            usar_aneel = st.toggle(
+                f"Usar a tarifa da ANEEL para este município "
+                f"(R$ {fmt_num(ref['tarifa_com_tributos'], 4)}/kWh)",
+                value=True, key="hm_tarifa_aneel")
+            if usar_aneel:
+                tarifa_mun = float(ref["tarifa_com_tributos"])
+            partes = [f"Distribuidora **{ref.get('distribuidora') or '—'}**"]
+            if ref.get("tarifa_sem_tributos"):
+                partes.append(
+                    f"homologada (sem tributos) R$ {fmt_num(ref['tarifa_sem_tributos'], 4)}"
+                    f"/kWh · faturada (com tributos) "
+                    f"R$ {fmt_num(ref['tarifa_com_tributos'], 4)}/kWh")
+            if ref.get("reh"):
+                partes.append(f"REH {ref['reh']}")
+            if pd.notna(ref.get("ano_samp")):
+                partes.append(f"faturamento {int(ref['ano_samp'])}")
+            st.caption(
+                " · ".join(partes) + ". A faturada é receita com PIS/COFINS/ICMS ÷ mercado "
+                "da classe Iluminação Pública, **média da área de concessão inteira** e sem "
+                "COSIP — serve de referência de triagem; a fatura do município prevalece "
+                "sobre ela."
+                + (" ⚠️ Município atendido por mais de uma distribuidora: valor médio."
+                   if ref.get("composta") else ""))
+        elif aneel_tarifas.carregar().empty:
+            st.caption(
+                "Tarifa da barra lateral. Para preencher automaticamente com a tarifa "
+                "B4a da distribuidora, rode `py -m hub_municipios.etl_aneel`.")
+
         painel = indicadores.cruzar(_cosip((escolhido,), tuple(sorted(anos))),
                                     parque, custo_ppp, pot_futura, corte,
-                                    tarifa, fator_co2,
+                                    tarifa_mun, fator_co2, prazo_ciclo, reajuste,
                                     estimar_sem_bdgd=usar_estimativa)
         if painel.empty:
             st.error("Nenhum dado retornado para este município.")
@@ -390,28 +441,41 @@ with aba_municipio, _aba_isolada("Município"):
             # ── Energia hoje ────────────────────────────────────────────────
             if pd.notna(r.get("consumo_estimado_kwh_ano")):
                 st.markdown("#### Energia")
+                declarada = r.get("origem_consumo") == indicadores.ORIGEM_CONSUMO_DECLARADO
                 e = st.columns(4, border=True)
-                e[0].metric("Consumo estimado",
-                            f"{fmt_num(r['consumo_estimado_kwh_ano'] / 1000)} MWh/ano",
-                            help="Carga instalada × 4.160 h/ano de operação. Derivado da "
-                                 "carga, não do campo de energia da BDGD — que é "
-                                 "inconsistente em um terço dos municípios.")
+                e[0].metric(
+                    "Consumo · " + ("declarado" if declarada else "derivado"),
+                    f"{fmt_num(r['consumo_estimado_kwh_ano'] / 1000)} MWh/ano",
+                    help=("Medição declarada pela distribuidora à ANEEL. É a base do "
+                          "cálculo porque é medição, não modelo."
+                          if declarada else
+                          f"Carga instalada × {fmt_num(indicadores.HORAS_OPERACAO)} h/ano. "
+                          "O consumo declarado pela distribuidora não é utilizável neste "
+                          "município — fora da faixa física de horas de operação."))
                 e[1].metric("Custo da energia", _compacto(r.get("custo_energia_ano")) + "/ano",
-                            help=f"À tarifa de {fmt_moeda(tarifa)}/kWh informada.")
+                            help=f"À tarifa faturada de {fmt_moeda(tarifa_mun)}/kWh.")
                 e[2].metric("Custo por ponto.mês",
                             fmt_moeda(r.get("custo_energia_ponto_mes")),
                             help="Para comparar com a arrecadação por ponto: é quanto da "
                                  "CIP a conta de luz consome.")
+                e[3].metric(f"Custo no ciclo de {int(r.get('prazo_concessao_anos', 0))} anos",
+                            _compacto(r.get("custo_energia_ciclo_reais")),
+                            delta=f"nominal, {fmt_pct(r.get('reajuste_anual', 0))} a.a.",
+                            delta_color="off",
+                            help="Acumulado nominal reajustado — soma da série geométrica, "
+                                 "não o anual × prazo.")
+
                 declarado = r.get("consumo_kwh_ano")
-                if pd.notna(declarado) and float(declarado) > 0:
-                    desvio = (r["consumo_estimado_kwh_ano"] - declarado) / declarado
-                    e[3].metric("Consumo declarado à ANEEL",
-                                f"{fmt_num(declarado / 1000)} MWh/ano",
-                                delta=f"{fmt_pct(-desvio)} vs. estimado",
-                                delta_color="off")
-                else:
-                    e[3].metric("Consumo declarado à ANEEL", "—",
-                                help="A distribuidora não declarou consumo utilizável.")
+                derivado = r.get("carga_instalada_kw")
+                if pd.notna(declarado) and float(declarado) > 0 and pd.notna(derivado):
+                    outro = (float(derivado) * indicadores.HORAS_OPERACAO if declarada
+                             else float(declarado))
+                    rotulo = ("carga × horas de referência daria"
+                              if declarada else "o declarado à ANEEL daria")
+                    desvio = (outro - r["consumo_estimado_kwh_ano"]) / r["consumo_estimado_kwh_ano"]
+                    st.caption(
+                        f"Conferência: {rotulo} {fmt_num(outro / 1000)} MWh/ano "
+                        f"({fmt_pct(desvio)} de diferença).")
 
             # ── Modernização e emissões ─────────────────────────────────────
             econ_pct = r.get("economia_percentual")
@@ -422,23 +486,44 @@ with aba_municipio, _aba_isolada("Município"):
                             f"{fmt_num(r['potencia_media_w'], 0)} W")
                 m[1].metric("Economia de energia", fmt_pct(econ_pct),
                             help="Redução proporcional da carga instalada.")
-                m[2].metric("Economia anual",
+                m[2].metric("Economia · ano 1",
                             _compacto(r.get("economia_reais_ano")),
                             delta=f"{fmt_num(r.get('economia_kwh_ano', 0) / 1000)} MWh/ano",
-                            delta_color="off")
-                m[3].metric("CO₂ evitado",
-                            f"{fmt_num(r.get('co2_evitado_t_ano'), 1)} t/ano",
-                            help=f"Economia de energia × fator de emissão do SIN "
-                                 f"({fmt_num(fator_co2, 4)} tCO₂/MWh).")
+                            delta_color="off",
+                            help="Reais constantes do ano 1. NÃO multiplique pelo prazo — "
+                                 "use o acumulado ao lado.")
+                m[3].metric(f"Economia · {int(r.get('prazo_concessao_anos', 0))} anos",
+                            _compacto(r.get("economia_ciclo_reais")),
+                            delta=f"nominal, {fmt_pct(r.get('reajuste_anual', 0))} a.a.",
+                            delta_color="off",
+                            help="É este o número comparável ao de um EVTE.")
+
+                c1, c2 = st.columns(2)
+                c1.metric("CO₂ evitado", f"{fmt_num(r.get('co2_evitado_t_ano'), 1)} t/ano",
+                          help=f"Economia de energia × fator de emissão do SIN "
+                               f"({fmt_num(fator_co2, 4)} tCO₂/MWh).")
+                sobra_ano = r.get("sobra_reais_ano")
+                if pd.notna(sobra_ano) and float(sobra_ano) != 0:
+                    peso = float(r["economia_reais_ano"]) / abs(float(sobra_ano))
+                    c2.metric("Economia ÷ sobra da CIP", fmt_pct(peso),
+                              help="Quanto a economia de energia representa da sobra anual "
+                                   "de arrecadação. Abaixo de ~30% a eficientização não é o "
+                                   "driver do projeto: o que sustenta a PPP é a COSIP, e o "
+                                   "escopo tende a ser ampliação, O&M e telegestão.")
+
                 st.caption(
                     f"Trocar as luminárias levaria a potência média de "
                     f"{fmt_num(r['potencia_media_w'], 0)} W para {fmt_num(pot_futura)} W por "
-                    f"ponto — **{fmt_pct(econ_pct)} menos energia**. "
-                    "Estimativa de triagem: não substitui projeto luminotécnico nem "
-                    "considera demanda reprimida. **A redução de CO₂ é modesta por mérito "
-                    "da matriz brasileira**, predominantemente renovável: a mesma economia "
-                    "de kWh num país de matriz fóssil evitaria várias vezes mais emissões. "
-                    "O fator do SIN oscila com o despacho térmico e é publicado pelo MCTI."
+                    f"ponto — **{fmt_pct(econ_pct)} menos energia**, aplicados ao parque "
+                    "inteiro. Estimativa de triagem: não substitui projeto luminotécnico "
+                    "nem considera demanda reprimida. "
+                    "**Para comparar com um modelo econômico-financeiro, use o acumulado do "
+                    "ciclo e confirme que a tarifa dos dois lados é a faturada com "
+                    "tributos** — anual × prazo com tarifa da REH subestima o resultado em "
+                    "cerca de metade. **A redução de CO₂ é modesta por mérito da matriz "
+                    "brasileira**, predominantemente renovável: a mesma economia de kWh num "
+                    "país de matriz fóssil evitaria várias vezes mais emissões. O fator do "
+                    "SIN oscila com o despacho térmico e é publicado pelo MCTI."
                 )
 
             for aviso in indicadores.ressalvas(r):
@@ -571,8 +656,9 @@ with aba_mapa, _aba_isolada("Mapa"):
                 with st.spinner(f"Preparando {len(consultar)} municípios de {uf_mapa}…"):
                     painel_uf = indicadores.cruzar(_cosip(tuple(consultar), (ano_mapa,)),
                                                    parque, custo_ppp, pot_futura, corte,
-                                    tarifa, fator_co2,
-                                    estimar_sem_bdgd=usar_estimativa)
+                                                   tarifa, fator_co2, prazo_ciclo,
+                                                   reajuste,
+                                                   estimar_sem_bdgd=usar_estimativa)
 
             if painel_uf.empty:
                 st.info(f"Sem dados para {uf_mapa}.")
@@ -683,8 +769,8 @@ with aba_carteira, _aba_isolada("Carteira"):
         painel = indicadores.cruzar(
             _cosip(tuple(st.session_state["hm_codigos"]), (ano_foco,)),
             parque, custo_ppp, pot_futura, corte,
-                                    tarifa, fator_co2,
-                                    estimar_sem_bdgd=usar_estimativa)
+            tarifa, fator_co2, prazo_ciclo, reajuste,
+            estimar_sem_bdgd=usar_estimativa)
 
         resumo = painel["viabilidade"].value_counts()
         cols = st.columns(len(ORDEM_VIABILIDADE), border=True)

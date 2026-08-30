@@ -15,8 +15,10 @@ tem de custear.
 | `config.py` | caminhos das bases e parâmetros de negócio (tarifa, LED de referência) |
 | `siconfi.py` | cliente da API do Tesouro; extrai a COSIP do DCA Anexo I-C, com cache local |
 | `bdgd.py` | ingestão da entidade PIP do geodatabase e agregação municipal |
-| `indicadores.py` | cruzamento das duas bases e os indicadores derivados |
-| `etl_bdgd.py` | CLI do ETL offline |
+| `aneel_tarifas.py` | tarifas B4a da ANEEL — homologada (sem tributos) e faturada (com) |
+| `indicadores.py` | cruzamento das bases e os indicadores derivados |
+| `etl_bdgd.py` | CLI do ETL offline da BDGD |
+| `etl_aneel.py` | CLI do ETL offline das tarifas |
 
 A UI é `paginas/hub_municipios.py` — só apresentação, como nos demais módulos do portal.
 
@@ -46,6 +48,63 @@ BDGD .gdb ──ogr2ogr──► parquet PIP ──┐     │
 ```
 
 O portal lê **apenas** o agregado. O bruto nunca entra no Streamlit.
+
+## Energia: as duas tarifas e o anual × ciclo
+
+Este bloco foi refeito em 28/08/2026 depois de uma divergência de fator 2 entre a
+triagem de São José da Lapa e o modelo econômico-financeiro de Matozinhos. **Não havia
+erro de cálculo físico** — havia duas grandezas diferentes sendo comparadas:
+
+| | O que é | Onde erra |
+|---|---|---|
+| `tarifa_sem_tributos` | TUSD + TE da resolução homologatória | Cemig: R$ 0,3399/kWh |
+| `tarifa_com_tributos` | R$/kWh **faturado**, receita ÷ mercado da classe IP | Cemig: R$ 0,4725/kWh |
+| `economia_reais_ano` | ano 1, reais constantes | — |
+| `economia_ciclo_reais` | acumulado **nominal** do prazo | 22 anos a 4% a.a. = ×34,25, não ×22 |
+
+Usar a tarifa da REH onde cabe a faturada tira 28% do custo de energia; multiplicar o
+anual pelo prazo tira outros 36% do acumulado. Juntos, fator 2 — que era exatamente a
+distância entre as duas leituras. Com as duas corrigidas, Matozinhos fecha em
+R$ 16,46 mi contra os R$ 17 mi do modelo da equipe.
+
+Outras duas mudanças do mesmo lote:
+
+- **Base de consumo**: o declarado à ANEEL passa na frente do derivado sempre que as
+  horas equivalentes (recalculadas de consumo ÷ carga, não lidas da coluna) caem em
+  3.000–5.000 h/ano. `origem_consumo` diz qual valeu — 3.537 municípios pelo declarado,
+  526 pelo derivado.
+- **Guarda de potência**: 1.354 municípios declaram potência média fora de 50–400 W por
+  ponto (Neoenergia Elektro 208.625 W, Copel 37.736 W, CPFL e RGE ~1.250 W). Neles o
+  bloco de energia inteiro sai nulo, com ressalva. Arrecadação e triagem seguem válidas.
+
+## Atualizar as tarifas da ANEEL
+
+```bash
+py -m hub_municipios.etl_aneel --listar   # imprime o SCHEMA REAL; rode isto primeiro
+py -m hub_municipios.etl_aneel            # grava data/tarifas_b4a.parquet
+py -m hub_municipios.etl_aneel --ano 2025 # fixa o ano do SAMP
+```
+
+Uma vez por ano, depois do reajuste. Três armadilhas, todas tratadas e testadas:
+
+1. **O B4a não está em `DscSubGrupo`.** O subgrupo é `"B4"`; o "a" só existe em
+   `DscSubClasse` (`"Iluminação pública – B4a"`). Filtrar por `"B4a"` no subgrupo
+   devolve zero linhas sem erro nenhum. `B4b` é bulbo de lâmpada e fica de fora.
+2. **`Receita Energia (R$)` do SAMP JÁ INCLUI os tributos.** ICMS, PIS/PASEP e COFINS
+   são o detalhamento do que está dentro dela, cobrados "por dentro". Somá-los por cima
+   dá R$ 0,60/kWh na Cemig em vez de R$ 0,47 — 27% de inflação no custo de energia. A
+   conferência que pega isso: descontando os tributos, o SAMP tem de reproduzir a
+   tarifa da REH, que vem de outro dataset. Cemig: 0,3424 contra 0,3399, 0,7% de erro.
+3. **O SAMP tem mês com erro de ordem de grandeza.** A Cemig declarou R$ 388 milhões de
+   receita de IP em junho/2026 contra ~R$ 37 milhões nos demais meses. Por isso a
+   agregação é **mediana das competências**, nunca soma anual — que devolvia
+   R$ 1,25/kWh.
+
+O de-para BDGD → sigla ANEEL está em `ALIAS_BDGD_ANEEL` e **não é derivável**: a ANEEL
+identifica as Energisa por acrônimo regulatório (EAC, EMS, EMT, EMR, ENF, EPB, ERO,
+ESE, ESS, ETO), a Enel SP pela razão social antiga (ELETROPAULO) e as duas do Norte
+pelo controlador atual (ÂMBAR). Sem a tabela, o casamento por nome acerta 16 de 38.
+Cobertura atual: 38/38 distribuidoras, 4.913 dos 5.417 municípios.
 
 ## Duas armadilhas do domínio que o módulo trata
 
