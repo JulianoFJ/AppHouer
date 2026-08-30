@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from acesso import registrar_acao
 from cadastro_ip import aneel_2590
 from premissas_ip import coleta, schema
 
@@ -344,6 +345,8 @@ with g1:
             from premissas_ip.saidas import planilha_inputs
             data = planilha_inputs.gerar(resp)
             st.session_state["pip_xlsx_inputs"] = data
+            registrar_acao("inputs_gerados", alvo=str(resp.municipio or "(sem municipio)"),
+                           detalhe=f"{len(data) / 1024:.0f} KB")
             st.success("✅ Planilha de inputs gerada.")
         except Exception as exc:  # noqa: BLE001
             import traceback
@@ -361,6 +364,8 @@ with g2:
         try:
             from premissas_ip.saidas import blocos_relatorio
             xlsx, md = blocos_relatorio.gerar(resp)
+            registrar_acao("blocos_relatorio_gerados",
+                           alvo=str(resp.municipio or "(sem municipio)"))
             st.session_state["pip_xlsx_rel"] = xlsx
             st.session_state["pip_md_rel"] = md
             st.success("✅ Blocos do relatório gerados.")

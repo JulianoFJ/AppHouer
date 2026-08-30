@@ -1,5 +1,5 @@
 """
-Tela inicial — hub de aplicações Houer.
+Tela inicial — hub de aplicações da Plataforma IP.
 
 Mostra cards clicáveis para cada aplicação disponível. Para adicionar uma nova
 aplicação ao hub, atualize a lista `PAGINAS` em `app.py` e (opcionalmente) adicione
@@ -118,7 +118,7 @@ st.markdown(
                     background: linear-gradient(90deg, #ffffff, #00A9E0);
                     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
                     letter-spacing: -1px; line-height: 1.1;">
-            Plataforma Houer
+            Plataforma IP
         </div>
         <div style="font-size: 1.1rem; color: #94a3b8; margin-top: 0.5rem;">
             Soluções de engenharia para iluminação pública municipal

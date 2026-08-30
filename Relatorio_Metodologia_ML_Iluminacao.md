@@ -1,6 +1,6 @@
 # Relatório Técnico de Metodologia
 ## Sistema Preditivo de Iluminação Pública com Aprendizado de Máquina
-### Houer — Concessão de Cidade Inteligente / Iluminação Pública Municipal
+### Concessão de Cidade Inteligente / Iluminação Pública Municipal
 
 ---
 
@@ -40,7 +40,7 @@ Nesse contexto, dois desafios técnicos tornam-se críticos:
 
 ### 1.2 Objetivo do Sistema
 
-O sistema preditivo desenvolvido pela Houer tem por objetivo **estimar com rapidez e rastreabilidade** as métricas fotométricas esperadas e a potência necessária para cada ponto de iluminação, dado o conjunto de características geométricas e classificação da via, permitindo:
+O sistema preditivo tem por objetivo **estimar com rapidez e rastreabilidade** as métricas fotométricas esperadas e a potência necessária para cada ponto de iluminação, dado o conjunto de características geométricas e classificação da via, permitindo:
 
 - Pré-dimensionamento de potência por fornecedor para toda a malha inventariada;
 - Identificação automatizada de pontos de risco de não-conformidade NBR 5101;
@@ -56,7 +56,7 @@ O sistema **não substitui** o projeto luminotécnico definitivo exigido contrat
 
 ### 2.1 Origem dos Dados
 
-Os dados de treinamento são provenientes de simulações fotométricas históricas reais executadas pela Houer para concessões municipais anteriores, consolidadas em planilhas de inventário e resultado de simulação no padrão interno da empresa. Cada registro corresponde a um ponto de iluminação simulado em software fotométrico, com as colunas de entrada (geometria) e resultado (métricas fotométricas e potência escolhida).
+Os dados de treinamento são provenientes de simulações fotométricas históricas reais executadas para concessões municipais anteriores, consolidadas em planilhas de inventário e resultado de simulação no padrão interno da empresa. Cada registro corresponde a um ponto de iluminação simulado em software fotométrico, com as colunas de entrada (geometria) e resultado (métricas fotométricas e potência escolhida).
 
 ### 2.2 Composição do Dataset
 
@@ -410,7 +410,7 @@ Toda predição por aprendizado de máquina carrega incerteza intrínseca. O MAE
 Inventário municipal
         │
         ▼
- [Sistema ML — Houer]           ← Este sistema
+ [Sistema ML]           ← Este sistema
   Triagem em larga escala
   Pré-dimensionamento de W
   Identificação de CPE e braço
@@ -453,7 +453,7 @@ Esta rastreabilidade é um requisito contratual típico em concessões de servi�
 
 ## 10. Conclusão
 
-O sistema preditivo de iluminação pública desenvolvido pela Houer representa uma aplicação de engenharia de aprendizado de máquina diretamente alinhada às demandas operacionais de concessões de cidade inteligente. A combinação de modelos de regressão (Random Forest e Gradient Boosting) para estimativa de métricas fotométricas e potência, com classificadores para decisões auxiliares (CPE e tipo de braço), cria uma camada de inteligência de triagem que:
+O sistema preditivo de iluminação pública representa uma aplicação de engenharia de aprendizado de máquina diretamente alinhada às demandas operacionais de concessões de cidade inteligente. A combinação de modelos de regressão (Random Forest e Gradient Boosting) para estimativa de métricas fotométricas e potência, com classificadores para decisões auxiliares (CPE e tipo de braço), cria uma camada de inteligência de triagem que:
 
 1. **Reduz drasticamente o tempo de análise** de inventários de larga escala, de semanas para minutos;
 2. **Concentra o esforço de engenharia** nos pontos de maior risco de não-conformidade NBR 5101;
@@ -478,4 +478,4 @@ A metodologia adotada está aderente às boas práticas de ciência de dados apl
 
 ---
 
-*Este relatório foi produzido pela equipe técnica da Houer com base no sistema preditivo em operação. Os dados de desempenho dos modelos referem-se ao dataset histórico disponível até abril de 2026. Retreinamento periódico com novos dados de simulação é recomendado para manutenção da qualidade preditiva.*
+*Este relatório foi produzido pela equipe técnica com base no sistema preditivo em operação. Os dados de desempenho dos modelos referem-se ao dataset histórico disponível até abril de 2026. Retreinamento periódico com novos dados de simulação é recomendado para manutenção da qualidade preditiva.*

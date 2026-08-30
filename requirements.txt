@@ -13,3 +13,9 @@ fpdf2>=2.8.0
 # Ambas são dependências puras (wheels padrão) e não afetam os demais módulos.
 requests>=2.31.0
 pyarrow>=14.0.0
+
+# Trilha de uso (pacote `acesso`). Só são exercidas quando o backend Google Sheets
+# está configurado em st.secrets; sem elas o log cai para CSV local automaticamente.
+# Ambas são puras e não tocam o resolvedor de scikit-learn/joblib.
+gspread>=6.0.0
+google-auth>=2.28.0

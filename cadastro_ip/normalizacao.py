@@ -129,7 +129,14 @@ TOKENS_PENALIDADE = [
 # em colunas válidas (ex: "Endereço Cadastro" na inspeção é o endereço original).
 # Não deve derrubar a coluna se for o único candidato.
 TOKENS_PENALIDADE_LEVE = ["cadastro", "original"]
-# Tokens que indicam que a coluna é a principal — bonificam
+# Tokens que indicam que a coluna é a principal — bonificam.
+#
+# ATENÇÃO: "houer" aqui NÃO é branding do portal, é o texto que aparece de fato no
+# cabeçalho das planilhas de cadastro recebidas ("Tipo de Lâmpada_Houer",
+# "Quantidade de Lâmpadas_HOUER"), marcando a coluna já tratada em campo em oposição à
+# coluna crua da prefeitura. É dado de entrada de terceiro, não identidade nossa:
+# removê-lo cegaria o detector e a coluna tratada perderia para a crua.
+# Coberto por tests/test_normalizacao.py::TestDetectorPreferenciaHouer.
 TOKENS_BONIFICACAO = ["houer"]
 
 # Bonificacoes por conceito - quando a coluna contem esses tokens, ganha pontos extras.
@@ -174,7 +181,7 @@ def _score_candidato(coluna: str, sinonimos_slug: set[str], conceito: str | None
     # Bonus/bonificação só aplicam se já houve algum match com sinônimo
     # (evita que tokens secundários inflem score de coluna sem relação)
     if score > 0:
-        # Bonifica tokens preferidos ("houer" indica coluna tratada pela equipe)
+        # Bonifica tokens preferidos (ver TOKENS_BONIFICACAO: alias de planilha, nao marca)
         if any(t in col_slug for t in TOKENS_BONIFICACAO):
             score += 15
 

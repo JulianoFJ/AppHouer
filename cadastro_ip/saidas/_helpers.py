@@ -1,7 +1,7 @@
 """
 Helpers comuns para os 3 geradores de saída.
 
-Estilização padronizada (paleta Houer Navy + Teal), formatação numérica,
+Estilização padronizada (paleta Navy + Teal), formatação numérica,
 e utilidades para gravar DataFrame + fórmulas vivas usando openpyxl direto
 (não via pandas.to_excel, que não preserva fórmulas como strings).
 """
@@ -17,20 +17,20 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 
-# ── Paleta Houer ──────────────────────────────────────────────────────────────
-HOUER_NAVY = "1B3664"
-HOUER_TEAL = "00A9E0"
+# ── Paleta da marca ──────────────────────────────────────────────────────────────
+PALETA_NAVY = "1B3664"
+PALETA_TEAL = "00A9E0"
 LIGHT_GRAY = "F1F5F9"
 BORDER_GRAY = "94A3B8"
 
 
 # ── Estilos pré-fabricados ────────────────────────────────────────────────────
 def header_fill() -> PatternFill:
-    return PatternFill(start_color=HOUER_NAVY, end_color=HOUER_NAVY, fill_type="solid")
+    return PatternFill(start_color=PALETA_NAVY, end_color=PALETA_NAVY, fill_type="solid")
 
 
 def subheader_fill() -> PatternFill:
-    return PatternFill(start_color=HOUER_TEAL, end_color=HOUER_TEAL, fill_type="solid")
+    return PatternFill(start_color=PALETA_TEAL, end_color=PALETA_TEAL, fill_type="solid")
 
 
 def total_fill() -> PatternFill:
@@ -239,7 +239,7 @@ def workbook_para_bytes(wb: Workbook) -> bytes:
 
 
 __all__ = [
-    "HOUER_NAVY", "HOUER_TEAL",
+    "PALETA_NAVY", "PALETA_TEAL",
     "header_fill", "subheader_fill", "total_fill",
     "aplicar_estilo_header", "aplicar_estilo_subheader", "aplicar_estilo_total",
     "escrever_dataframe", "escrever_formulas_coluna",

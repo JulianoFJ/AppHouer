@@ -11,6 +11,7 @@ Esta página é apenas a UI; a lógica do pipeline vive em `cadastro_ip/`.
 import pandas as pd
 import streamlit as st
 
+from acesso import registrar_acao
 from cadastro_ip import aneel_2590, pipeline, relatorio
 from cadastro_ip.saidas import analise_cadastro as saida_analise
 from cadastro_ip.saidas import classificacao_pontos as saida_classificacao
@@ -161,7 +162,7 @@ with col_a:
     )
 with col_b:
     up_insp = st.file_uploader(
-        "🔍 Base de inspeção de campo (Base_HouerApp_IV)",
+        "🔍 Base de inspeção de campo (Base_Inspecao_Campo)",
         type=["xlsx", "xls", "csv"],
         key="up_inspecao",
         help="Amostra inspecionada em campo.",
@@ -316,6 +317,10 @@ if btn:
             xlsx_analise = saida_analise.gerar(resultado_pipeline)
             xlsx_quant = saida_quantitativo.gerar(resultado_pipeline)
             texto_relatorio = relatorio.gerar(resultado_pipeline)
+
+            registrar_acao("cadastro_processado",
+                           alvo=f"{municipio_input}/{uf_input}",
+                           detalhe=f"{resultado_pipeline.total_cadastro:,} pontos".replace(",", "."))
 
             resultado_pipeline.xlsx_classificacao = xlsx_classif
             resultado_pipeline.xlsx_analise_cadastro = xlsx_analise

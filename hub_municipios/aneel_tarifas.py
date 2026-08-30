@@ -199,7 +199,7 @@ def _sessao() -> requests.Session:
                      status_forcelist=[429, 500, 502, 503, 504],
                      allowed_methods=["GET"])
     s.mount("https://", HTTPAdapter(max_retries=politica))
-    s.headers.update({"User-Agent": "Plataforma-IP-Houer/1.0"})
+    s.headers.update({"User-Agent": "Plataforma-IP/1.0"})
     return s
 
 

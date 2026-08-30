@@ -18,6 +18,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from acesso import registrar_acao
 from hub_municipios import (aneel_tarifas, bdgd, config, estimativa, indicadores,
                             malhas, ppp, siconfi)
 
@@ -338,6 +339,11 @@ with aba_municipio, _aba_isolada("Município"):
             escolhido = opcoes[rotulo]
 
     if escolhido:
+        if st.session_state.get("hm_ultimo_consultado") != escolhido:
+            st.session_state["hm_ultimo_consultado"] = escolhido
+            registrar_acao("municipio_consultado", alvo=str(rotulo),
+                           detalhe=f"IBGE {escolhido}")
+
         # Tarifa da distribuidora que atende ESTE município (ETL da ANEEL). Fica na aba,
         # não na barra lateral, porque só existe depois de o município ser escolhido.
         tarifa_mun = tarifa
@@ -763,6 +769,7 @@ with aba_carteira, _aba_isolada("Carteira"):
 
     if codigos and st.button("Executar triagem", type="primary", key="hm_go"):
         st.session_state["hm_codigos"] = codigos
+        registrar_acao("carteira_triada", alvo=f"{len(codigos)} municípios")
 
     if st.session_state.get("hm_codigos"):
         ano_foco = st.selectbox("Exercício", sorted(anos, reverse=True), key="hm_ano_foco")

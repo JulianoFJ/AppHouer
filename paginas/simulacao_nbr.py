@@ -35,10 +35,10 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-    /* Paleta Houer: Navy (#1B3664), Teal (#00A9E0) */
+    /* Paleta: Navy (#1B3664), Teal (#00A9E0) */
     :root {
-        --houer-navy: #1B3664;
-        --houer-teal: #00A9E0;
+        --marca-navy: #1B3664;
+        --marca-teal: #00A9E0;
         --bg-dark: #0b111e;
         --card-bg: #12192b;
         --card-border: #1f2937;
@@ -53,7 +53,7 @@ st.markdown("""
     .hero-title {
         font-size: 3.2rem;
         font-weight: 800;
-        background: linear-gradient(90deg, #ffffff, var(--houer-teal));
+        background: linear-gradient(90deg, #ffffff, var(--marca-teal));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin-bottom: 0rem;
@@ -70,14 +70,14 @@ st.markdown("""
         background: rgba(18, 25, 43, 0.6);
         backdrop-filter: blur(10px);
         border: 1px solid var(--card-border);
-        border-top: 4px solid var(--houer-teal);
+        border-top: 4px solid var(--marca-teal);
         border-radius: 20px;
         padding: 1.8rem;
         transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     }
     .forn-card:hover {
         transform: translateY(-8px);
-        border-color: var(--houer-teal);
+        border-color: var(--marca-teal);
         background: rgba(27, 54, 100, 0.2);
         box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
     }
@@ -123,12 +123,12 @@ st.markdown("""
         display: block;
         width: 6px;
         height: 28px;
-        background: var(--houer-teal);
+        background: var(--marca-teal);
         border-radius: 3px;
     }
 
     div[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, var(--houer-navy), #0b111e);
+        background: linear-gradient(180deg, var(--marca-navy), #0b111e);
         border-right: 1px solid #1f2937;
     }
 </style>
@@ -156,7 +156,7 @@ UNITS_MAP = {
     'lmed': 'cd/m²', 'uo': '', 'ul': '', 'emed': 'lux', 'emin': 'lux', 'w': 'W'
 }
 
-# Projeção física de cada classificação de braço (metros) — tabela padrão Houer
+# Projeção física de cada classificação de braço (metros) — tabela padrão interna
 BRACOS_PROJECAO = {
     'Curto I':  1.2,
     'Curto II': 1.4,
@@ -522,17 +522,26 @@ regras_braco_finas, regras_braco_classe = carregar_regras_braco_novo()
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
-col_l, col_r = st.columns([1, 3])
-with col_l:
-    logo_path = os.path.join(PASTA, 'images.png')
-    if os.path.exists(logo_path):
-        st.image(logo_path, width=180)
-    else:
-        st.markdown('<div style="background:white; border-radius:12px; padding:10px; display:flex; justify-content:center; align-items:center; width:80px; height:80px;"><span style="color:#1B3664; font-size:24px; font-weight:900;">H<span style="color:#00A9E0;">O</span></span></div>', unsafe_allow_html=True)
-
-with col_r:
-    st.markdown('<p class="hero-title" style="margin-top:10px;">Houer</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hero-sub" style="margin-top:-15px; font-weight:600; color:var(--houer-teal);">impactando gerações</p>', unsafe_allow_html=True)
+# Sem logotipo: a identidade do portal é textual e vive na sidebar do `app.py`, para
+# que exista um único lugar a mexer se o nome mudar de novo.
+#
+# Estilo inline, e não as classes `hero-title`/`hero-sub`: aquelas foram calibradas
+# para uma palavra curta (o antigo logotipo textual) e usam margem negativa para colar
+# o subtítulo — com um título longo as duas linhas se sobrepõem.
+st.markdown(
+    """
+    <div style="margin: 0.4rem 0 0.2rem 0;">
+      <div style="font-size:2.6rem; font-weight:800; line-height:1.15;
+                  background: linear-gradient(90deg,#ffffff,#00A9E0);
+                  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+                  letter-spacing:-1px;">Simulação NBR 5101</div>
+      <div style="font-size:1.02rem; color:#94a3b8; margin-top:0.35rem;">
+        Dimensionamento luminotécnico assistido por aprendizado de máquina
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 st.divider()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -651,7 +660,7 @@ def gerar_pdf(fornecedores, resultados, info_nbr, inputs, banco_luminarias, suge
     pdf.set_font("Arial", "B", 16)
     
     # Cabeçalho
-    pdf.set_text_color(27, 54, 100) # Azul Houer
+    pdf.set_text_color(27, 54, 100) # Azul da paleta
     pdf.cell(0, 10, "Relatório de Simulação de Iluminação Pública", ln=True, align='C')
     pdf.set_font("Arial", "", 10)
     pdf.set_text_color(100, 100, 100)
@@ -1568,7 +1577,7 @@ with tab_lote:
     st.download_button(
         label='⬇️ Baixar Planilha Padrão (.xlsx)',
         data=buffer_template.getvalue(),
-        file_name='template_simulacao_HOUER.xlsx',
+        file_name='template_simulacao.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
     
@@ -1964,7 +1973,7 @@ with tab_lote:
                             df_saida[f'Potencia Real (W) - {forn}'] = pots_reais
                             df_saida[f'Custo Unitario (R$) - {forn}'] = custos_unit
                 
-                # Formata para o template HOUER (Columns D-DM)
+                # Formata para o template de exportação (Columns D-DM)
                 df_export = formatar_resultado_template(df_saida)
                 st.session_state.df_lote = df_saida
                 st.session_state.df_export = df_export
@@ -2017,12 +2026,12 @@ with tab_lote:
                     df_tabela.to_excel(writer, sheet_name='Resultado', index=False)
                     df_tabela_din.to_excel(writer, sheet_name='Tabela Dinâmica', index=False)
                     df_preview_export.to_excel(writer, sheet_name='Dados Completos', index=False)
-                    df_export.to_excel(writer, sheet_name='Template Houer', index=False)
-                    writer.sheets['Template Houer'].sheet_state = 'hidden'
+                    df_export.to_excel(writer, sheet_name='Template', index=False)
+                    writer.sheets['Template'].sheet_state = 'hidden'
                 st.download_button(
                     '✅ Baixar Resultados (.xlsx)',
                     data=buffer_resultado.getvalue(),
-                    file_name='resultados_simulacao_HOUER.xlsx',
+                    file_name='resultados_simulacao.xlsx',
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     type='primary',
                 )

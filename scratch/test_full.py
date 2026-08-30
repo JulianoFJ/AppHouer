@@ -1,5 +1,5 @@
 ﻿"""
-test_full.py â€” Suite de testes do modelo Houer ML
+test_full.py â€” Suite de testes do modelo ML
 ==================================================
 Testa todos os comportamentos crÃ­ticos:
   1. Carregamento de modelos

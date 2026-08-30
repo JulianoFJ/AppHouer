@@ -1,9 +1,9 @@
 @echo off
 setlocal
-title HOUER - Plataforma de Iluminacao Publica
+title Plataforma IP - Iluminacao Publica
 
 echo ==========================================================
-echo   HOUER - PLATAFORMA DE ILUMINACAO PUBLICA
+echo   PLATAFORMA IP - ILUMINACAO PUBLICA
 echo   Simulacao NBR 5101  +  Analise de Cadastro
 echo ==========================================================
 echo.

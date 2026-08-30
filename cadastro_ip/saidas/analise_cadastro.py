@@ -3,7 +3,7 @@ Gerador do arquivo `Analise Cadastro.xlsx` (secao 12.2).
 
 Estrutura (replicando o modelo ARMBH, com adaptacoes):
   - Aba `Cadastro` - cadastro normalizado
-  - Aba `Base_HouerApp_IV` - inspecao bruta
+  - Aba `Base_Inspecao_Campo` - inspecao bruta
   - Aba `Comparacao` - cruzamento ponto-a-ponto com flags de divergencia
   - Aba `Resultado Comparacao` - % de acerto (tecnologia/potencia/ambos)
   - Aba `Tratamento Convencional`
@@ -45,7 +45,7 @@ def gerar(resultado) -> bytes:
     wb.remove(wb.active)
 
     _aba_cadastro(wb, resultado)
-    _aba_base_houerapp_iv(wb, resultado)
+    _aba_base_inspecao_campo(wb, resultado)
     _aba_comparacao(wb, resultado)
     _aba_resultado_comparacao(wb, resultado)
     _aba_tratamento_convencional(wb, resultado)
@@ -67,9 +67,9 @@ def _aba_cadastro(wb: Workbook, r) -> None:
     ws.freeze_panes = "A2"
 
 
-# ── Aba Base_HouerApp_IV ──────────────────────────────────────────────────────
-def _aba_base_houerapp_iv(wb: Workbook, r) -> None:
-    ws = wb.create_sheet("Base_HouerApp_IV")
+# ── Aba Base_Inspecao_Campo ──────────────────────────────────────────────────────
+def _aba_base_inspecao_campo(wb: Workbook, r) -> None:
+    ws = wb.create_sheet("Base_Inspecao_Campo")
     df = r.inspecao_normalizada.copy()
     df = df.drop(columns=[c for c in ["familia_tecnologia"] if c in df.columns])
     escrever_dataframe(ws, df, linha_inicial=1)

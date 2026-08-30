@@ -5,7 +5,7 @@ Duas famílias:
   - LED — qualquer variante contendo "LED"
   - Convencional — tudo que não é LED
 
-E normalização dos códigos de tecnologias convencionais para o padrão da Houer:
+E normalização dos códigos de tecnologias convencionais para o padrão interno:
 VS, VM, VMT, MT, FL, IN, mais categorias especiais de luminária (Globo,
 Ornamental, Rebatedor, Projetor).
 """

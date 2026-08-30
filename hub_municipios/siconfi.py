@@ -52,7 +52,7 @@ COL_LIQUIDA = "receitas realizadas liquidas"
 DEDUCAO_EM_MODULO = True
 
 HEADERS = {
-    "User-Agent": "Plataforma Houer IP - Hub de Municipios (uso responsavel)",
+    "User-Agent": "Plataforma IP - Hub de Municipios (uso responsavel)",
     "Accept": "application/json",
 }
 TIMEOUT = 60

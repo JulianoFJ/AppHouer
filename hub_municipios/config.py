@@ -27,8 +27,17 @@ APP = PACOTE.parent
 RAIZ = APP.parent
 
 # ── Dados brutos e intermediários (fora do repositório) ──────────────────────
-# Sobrescreva com a variável de ambiente HOUER_DADOS para apontar outro disco.
-DADOS = Path(os.environ.get("HOUER_DADOS", RAIZ / "dados"))
+# Sobrescreva com a variável de ambiente PLATAFORMA_IP_DADOS para apontar outro disco.
+#
+# `HOUER_DADOS` continua sendo aceita como nome antigo: ela está configurada nas
+# máquinas que já processam a BDGD, e quebrar essas configurações silenciosamente
+# faria o ETL cair de volta para `RAIZ/dados` sem avisar — que existe, está vazia, e
+# produziria um agregado nacional truncado em vez de um erro.
+def _env(nome_novo: str, nome_antigo: str) -> str | None:
+    return os.environ.get(nome_novo) or os.environ.get(nome_antigo)
+
+
+DADOS = Path(_env("PLATAFORMA_IP_DADOS", "HOUER_DADOS") or (RAIZ / "dados"))
 BDGD_BRUTOS = DADOS / "bdgd" / "brutos"
 BDGD_PROCESSADOS = DADOS / "bdgd" / "processados"
 SICONFI_CACHE = DADOS / "siconfi" / "cache"
@@ -37,13 +46,15 @@ SICONFI_CACHE = DADOS / "siconfi" / "cache"
 # 2024 vive no Drive compartilhado do time — ler de lá funciona, mas cada base é baixada
 # sob demanda pelo Drive File Stream: medido em 28/08/2026, ~7 min para uma base de
 # 5,65 GB contra ~55 s para uma base local de 15,9 GB. O gargalo é rede, não CPU.
-# Sobrescreva com HOUER_BDGD_EXTRA (caminhos separados por ';').
+# Sobrescreva com PLATAFORMA_IP_BDGD_EXTRA (caminhos separados por ';');
+# `HOUER_BDGD_EXTRA` segue aceita como nome antigo, pela mesma razão de DADOS.
 BDGD_PASTAS_EXTRA = [
     Path(r"G:\Drives compartilhados\Head de Energia\06. Projetos"
          r"\PVSC - Assistente de Pré-Viabilidade\CLP\Dados BDGD"),
 ]
-if os.environ.get("HOUER_BDGD_EXTRA"):
-    BDGD_PASTAS_EXTRA = [Path(p) for p in os.environ["HOUER_BDGD_EXTRA"].split(";") if p.strip()]
+_extra = _env("PLATAFORMA_IP_BDGD_EXTRA", "HOUER_BDGD_EXTRA")
+if _extra:
+    BDGD_PASTAS_EXTRA = [Path(p) for p in _extra.split(";") if p.strip()]
 
 
 def pastas_bdgd() -> list[Path]:

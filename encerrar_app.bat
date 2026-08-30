@@ -1,5 +1,5 @@
 @echo off
-title HOUER - Encerrar Simulador
+title Plataforma IP - Encerrar
 echo ==========================================================
 echo   ENCERRANDO SIMULADOR DE ILUMINACAO...
 echo ==========================================================

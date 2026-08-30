@@ -1,4 +1,4 @@
-# Tema da Plataforma Houer.
+# Tema da Plataforma IP.
 #
 # Por que este arquivo existe: localmente o app é iniciado com
 # `--theme.base "dark"` (ver iniciar_app.bat), mas o Streamlit Cloud não recebe
