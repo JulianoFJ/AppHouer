@@ -83,6 +83,7 @@ BASE = Path(__file__).parent / "paginas"
 PAGINAS = [
     st.Page(str(BASE / "home.py"),              title="Início",             icon="🏠", default=True, url_path="home"),
     st.Page(str(BASE / "simulacao_nbr.py"),     title="Simulação NBR 5101", icon="💡", url_path="simulacao"),
+    st.Page(str(BASE / "amostragem_campo.py"),  title="Amostragem para Inspeção", icon="🎯", url_path="amostragem"),
     st.Page(str(BASE / "analise_cadastro.py"),  title="Análise de Cadastro", icon="🗂️", url_path="cadastro"),
     st.Page(str(BASE / "hub_municipios.py"),    title="Hub de Municípios",  icon="🌎", url_path="municipios"),
 ]

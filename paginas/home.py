@@ -22,6 +22,20 @@ APPS_CARDS = [
         "tags": ["ML", "NBR 5101", "Individual + Lote"],
     },
     {
+        "page_url": "amostragem",
+        "page_file": "paginas/amostragem_campo.py",
+        "icon": "🎯",
+        "title": "Amostragem para Inspeção",
+        "subtitle": "Plano de campo dimensionado pela NBR 5426",
+        "description": (
+            "Recebe o cadastro do município e sorteia as duas amostras de inspeção — "
+            "medição estrutural e medição de qualidade, disjuntas — com tamanho pela "
+            "NBR 5426 e cobertura garantida de todas as classes de iluminação, das "
+            "avenidas e rodovias estruturantes e de toda a extensão do município."
+        ),
+        "tags": ["NBR 5426", "Estratificada", "Mapa", "60/40"],
+    },
+    {
         "page_url": "cadastro",
         "icon": "🗂️",
         "title": "Análise de Cadastro",
