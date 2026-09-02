@@ -19,8 +19,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from acesso import registrar_acao
-from hub_municipios import (aneel_tarifas, bdgd, config, estimativa, indicadores,
-                            malhas, ppp, siconfi)
+from hub_municipios import (aneel_tarifas, apresentacao, bdgd, config,
+                            contato_municipio, contratos_ip, despesas, estimativa,
+                            indicadores, malhas, ppp, ranking, siconfi)
 
 # ── Paleta ───────────────────────────────────────────────────────────────────
 # Viabilidade é uma escala de decisão, não uma identidade arbitrária: cada classe
@@ -112,6 +113,23 @@ def _ppps() -> pd.DataFrame:
 @st.cache_data(show_spinner="Consultando o SICONFI…")
 def _cosip(codigos: tuple, anos: tuple) -> pd.DataFrame:
     return siconfi.consultar_com_cache(list(codigos), list(anos))
+
+
+@st.cache_data(show_spinner="Consultando a despesa declarada ao SICONFI…")
+def _despesas(codigos: tuple, anos: tuple) -> pd.DataFrame:
+    return despesas.consultar_com_cache(list(codigos), list(anos))
+
+
+@st.cache_data(show_spinner="Buscando contratos no PNCP…")
+def _contratos_pncp(municipio: str, uf: str) -> pd.DataFrame:
+    return contratos_ip.buscar_com_cache(municipio, uf)
+
+
+@st.cache_data(show_spinner=False)
+def _contato_prefeitura(municipio: str, uf: str, codigo: str) -> dict:
+    """Canal institucional da prefeitura, como dict (o dataclass não é serializável)."""
+    from dataclasses import asdict
+    return asdict(contato_municipio.buscar_com_cache(municipio, uf, codigo))
 
 
 @st.cache_data(show_spinner="Carregando a malha do IBGE…")
@@ -305,8 +323,10 @@ if not anos:
     st.info("Selecione ao menos um exercício na barra lateral.")
     st.stop()
 
-aba_municipio, aba_mapa, aba_carteira, aba_ppp, aba_base = st.tabs(
-    ["🔎 Município", "🗺️ Mapa", "📊 Carteira", "🤝 PPPs contratadas", "🗄️ Base de dados"]
+(aba_municipio, aba_mapa, aba_carteira, aba_apresentacao,
+ aba_ppp, aba_base) = st.tabs(
+    ["🔎 Município", "🗺️ Mapa", "📊 Carteira", "📽️ Apresentação",
+     "🤝 PPPs contratadas", "🗄️ Base de dados"]
 )
 
 
@@ -596,6 +616,60 @@ with aba_municipio, _aba_isolada("Município"):
                     st.plotly_chart(fig, use_container_width=True,
                                     config={"displayModeBar": False})
 
+            # ── Contratos de IP já publicados (PNCP) ────────────────────
+            st.markdown("---")
+            st.markdown("##### 📄 Contratos de iluminação pública (PNCP)")
+            st.caption(
+                "O que o município já contrata hoje — a referência contra a qual a "
+                "contraprestação de uma PPP é comparada. Busca textual no Portal "
+                "Nacional de Contratações Públicas; confira o objeto antes de citar.")
+            if st.button("Buscar contratos deste município", key="hm_mun_pncp"):
+                st.session_state["hm_mun_pncp_df"] = _contratos_pncp(
+                    str(r["municipio"]), str(r.get("uf") or ""))
+                st.session_state["hm_mun_pncp_alvo"] = str(r["codigo_municipio"])
+
+            if (st.session_state.get("hm_mun_pncp_df") is not None
+                    and st.session_state.get("hm_mun_pncp_alvo") == str(r["codigo_municipio"])):
+                achados = st.session_state["hm_mun_pncp_df"]
+                if achados.empty:
+                    st.info("Nenhum contrato de iluminação pública encontrado. Contrato "
+                            "anterior à Lei 14.133/2021 pode não estar no PNCP.")
+                else:
+                    destaque = contratos_ip.principal(achados)
+                    if destaque:
+                        d1, d2, d3 = st.columns(3, border=True)
+                        mensal = destaque.get("valor_mensal_equivalente")
+                        d1.metric("Contrato vigente (equivalente)",
+                                  f"{_compacto(mensal)}/mês" if mensal else "—",
+                                  help="Valor global dividido pelo prazo contratual. "
+                                       "O PNCP publica o global, que cobre toda a "
+                                       "vigência — comparar direto com contraprestação "
+                                       "mensal erraria a ordem de grandeza.")
+                        d2.metric("Valor global", _compacto(destaque.get("valor_global")))
+                        contra = r.get("contraprestacao_mes")
+                        if mensal and pd.notna(contra) and contra:
+                            d3.metric("Contraprestação estimada",
+                                      f"{_compacto(contra)}/mês",
+                                      delta=f"{(contra / mensal - 1):+.0%} vs. contrato atual",
+                                      delta_color="off")
+                        else:
+                            d3.metric("Contraprestação estimada",
+                                      f"{_compacto(contra)}/mês" if pd.notna(contra) else "—")
+                    st.dataframe(
+                        achados[["objeto", "valor_global", "data_inicio_vigencia",
+                                 "data_fim_vigencia", "modalidade", "link"]],
+                        use_container_width=True, hide_index=True,
+                        column_config={
+                            "objeto": st.column_config.TextColumn("Objeto", width="large"),
+                            "valor_global": st.column_config.NumberColumn(
+                                "Valor global", format="%.2f"),
+                            "data_inicio_vigencia": "Início",
+                            "data_fim_vigencia": "Fim",
+                            "modalidade": "Modalidade",
+                            "link": st.column_config.LinkColumn("PNCP",
+                                                                display_text="abrir"),
+                        })
+
             with st.expander("Todos os indicadores"):
                 st.dataframe(painel, use_container_width=True, hide_index=True)
             st.download_button("⬇️  Baixar triagem (.xlsx)", _excel(painel),
@@ -772,12 +846,25 @@ with aba_carteira, _aba_isolada("Carteira"):
         registrar_acao("carteira_triada", alvo=f"{len(codigos)} municípios")
 
     if st.session_state.get("hm_codigos"):
-        ano_foco = st.selectbox("Exercício", sorted(anos, reverse=True), key="hm_ano_foco")
+        linha_ano, linha_desp = st.columns([1, 2])
+        ano_foco = linha_ano.selectbox("Exercício", sorted(anos, reverse=True),
+                                       key="hm_ano_foco")
+        buscar_despesa = linha_desp.checkbox(
+            "Trazer a despesa declarada ao SICONFI (Anexo I-E)", value=True,
+            key="hm_despesa",
+            help="Acrescenta a despesa do município com energia elétrica e permite "
+                 "medir quanto da conta de luz a CIP cobre. Dobra o tempo da primeira "
+                 "consulta de cada município; depois vem do cache local. Só 55% dos "
+                 "municípios declaram a função 25 — nos demais o indicador fica vazio.")
+
+        codigos_foco = tuple(st.session_state["hm_codigos"])
+        despesas_df = _despesas(codigos_foco, (ano_foco,)) if buscar_despesa else None
         painel = indicadores.cruzar(
-            _cosip(tuple(st.session_state["hm_codigos"]), (ano_foco,)),
+            _cosip(codigos_foco, (ano_foco,)),
             parque, custo_ppp, pot_futura, corte,
             tarifa, fator_co2, prazo_ciclo, reajuste,
-            estimar_sem_bdgd=usar_estimativa)
+            estimar_sem_bdgd=usar_estimativa,
+            despesas_declaradas=despesas_df)
 
         resumo = painel["viabilidade"].value_counts()
         cols = st.columns(len(ORDEM_VIABILIDADE), border=True)
@@ -793,34 +880,382 @@ with aba_carteira, _aba_isolada("Carteira"):
                          _compacto(alvos["contraprestacao_mes"].sum()))
             r2[2].metric("Sobra mediana", fmt_pct(alvos["sobra_percentual"].median()))
 
-            st.markdown(f"**Maiores oportunidades — {ano_foco}**")
-            top = alvos.nlargest(20, "contraprestacao_mes").sort_values("contraprestacao_mes")
-            fig = go.Figure(go.Bar(
-                x=top["contraprestacao_mes"], y=top["municipio"], orientation="h",
-                marker_color=[COR_VIABILIDADE[v] for v in top["viabilidade"]],
-                marker_cornerradius=4,
-                text=[fmt_pct(s) + " sobra" for s in top["sobra_percentual"]],
-                textposition="outside", textfont=dict(color=TINTA_SECUNDARIA),
-                customdata=top[["pontos_ip", "cosip_ponto_mes"]],
-                hovertemplate="<b>%{y}</b><br>contraprestação R$ %{x:,.0f}/mês<br>"
-                              "%{customdata[0]:,.0f} pontos · "
-                              "R$ %{customdata[1]:,.2f}/ponto.mês<extra></extra>"))
-            _layout(fig, max(320, 27 * len(top)))
-            fig.update_xaxes(title_text="contraprestação estimada (R$/mês)", showgrid=True,
-                             gridcolor=GRADE, tickformat=",.0f",
-                             title_font=dict(color=TINTA_FRACA),
-                             range=[0, top["contraprestacao_mes"].max() * 1.25])
-            fig.update_yaxes(showgrid=False)
-            fig.update_layout(showlegend=False, bargap=.3)
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-            st.caption("Ordenado pelo tamanho do contrato potencial. A cor é a classe de "
-                       "viabilidade; o rótulo, quanto da COSIP sobra depois da contraprestação.")
 
-        st.dataframe(painel, use_container_width=True, hide_index=True)
-        st.download_button("⬇️  Baixar carteira (.xlsx)", _excel(painel),
+        # ── Filtros e ranking ───────────────────────────────────────────────
+        # Este bloco vem ANTES do gráfico de propósito: o critério de ordenação comanda
+        # tanto a tabela quanto o gráfico, e escondê-lo embaixo fazia a carteira parecer
+        # ordenável só por contraprestação.
+        st.markdown("---")
+        st.markdown("**Ranking da carteira** — escolha o eixo, filtre e reordene.")
+
+        f1, f2, f3 = st.columns([2, 2, 1])
+        criterio_escolhido = f1.selectbox(
+            "Ordenar por", list(ranking.CRITERIOS), key="hm_criterio",
+            index=list(ranking.CRITERIOS).index(ranking.CRITERIO_PADRAO))
+        crit = ranking.criterio(criterio_escolhido)
+        st.caption(crit.ajuda)
+        sentido = f2.radio(
+            "Sentido", ["Maior primeiro", "Menor primeiro"], horizontal=True,
+            index=0 if crit.maior_primeiro else 1, key="hm_sentido",
+            help="O padrão segue o sentido natural do critério: carência (pouco LED, "
+                 "baixa cobertura da CIP) ordena do menor, porque é lá que está a "
+                 "oportunidade.")
+        top_n = f3.number_input("Mostrar", min_value=5, max_value=500, value=25, step=5,
+                                key="hm_top")
+
+        g1, g2, g3, g4 = st.columns(4)
+        ufs_painel = sorted(painel["uf"].dropna().unique().tolist())
+        ufs_sel = g1.multiselect("UF", ufs_painel, default=ufs_painel, key="hm_f_uf")
+        viab_sel = g2.multiselect("Viabilidade", ORDEM_VIABILIDADE,
+                                  default=ORDEM_VIABILIDADE, key="hm_f_viab")
+        sem_ppp = g3.checkbox("Excluir quem já tem PPP", value=False, key="hm_f_ppp")
+        so_plausivel = g4.checkbox(
+            "Só dado plausível", value=False, key="hm_f_plaus",
+            help="Descarta município com declaração de CIP implausível ou potência "
+                 "média fora da faixa física. Ligue antes de gerar apresentação.")
+
+        h1, h2, h3 = st.columns(3)
+        pop_min = h1.number_input("População mínima", min_value=0, value=0, step=1000,
+                                  key="hm_f_pop")
+        pontos_min = h2.number_input("Pontos de IP mínimo", min_value=0, value=0,
+                                     step=500, key="hm_f_pts")
+        cip_min = h3.number_input("CIP por ponto mínima (R$/mês)", min_value=0.0,
+                                  value=0.0, step=1.0, key="hm_f_cip")
+
+        filtrado = ranking.filtrar(
+            painel, ufs=ufs_sel or None, viabilidades=viab_sel or None,
+            populacao_min=pop_min or None, pontos_min=pontos_min or None,
+            cosip_ponto_mes_min=cip_min or None,
+            incluir_com_ppp=not sem_ppp, somente_dado_plausivel=so_plausivel)
+        ranqueado = ranking.rankear(filtrado, criterio_escolhido,
+                                    maior_primeiro=(sentido == "Maior primeiro"),
+                                    top=int(top_n))
+
+        st.caption(f"{len(filtrado)} de {len(painel)} municípios após os filtros · "
+                   f"exibindo {len(ranqueado)}")
+
+        # ── Gráfico, no mesmo eixo escolhido para a tabela ──────────────────
+        if not ranqueado.empty and crit.coluna in ranqueado.columns:
+            grafico = ranqueado.dropna(subset=[crit.coluna]).head(25)
+            if not grafico.empty:
+                # Barra horizontal lê de baixo para cima, então a ordem do eixo é a
+                # inversa da tabela para que o primeiro colocado apareça no topo.
+                grafico = grafico.iloc[::-1]
+                valores = pd.to_numeric(grafico[crit.coluna], errors="coerce")
+                percentual = crit.formato == "percentual"
+                rotulos = [ranking.formatar_valor(v, crit.formato) for v in valores]
+                fig = go.Figure(go.Bar(
+                    x=valores * (100 if percentual else 1), y=grafico["municipio"],
+                    orientation="h", marker_cornerradius=4,
+                    marker_color=[COR_VIABILIDADE.get(v, COR_AUSENTE)
+                                  for v in grafico["viabilidade"]],
+                    text=rotulos, textposition="outside",
+                    textfont=dict(color=TINTA_SECUNDARIA),
+                    customdata=grafico[["pontos_ip", "cosip_ponto_mes"]],
+                    hovertemplate="<b>%{y}</b><br>"
+                                  "%{customdata[0]:,.0f} pontos · "
+                                  "R$ %{customdata[1]:,.2f}/ponto.mês<extra></extra>"))
+                _layout(fig, max(320, 27 * len(grafico)))
+                minimo = float(min(valores.min() * (100 if percentual else 1), 0))
+                maximo = float(valores.max() * (100 if percentual else 1))
+                folga = (maximo - minimo) * 0.22 or 1.0
+                fig.update_xaxes(
+                    title_text=crit.rotulo + (" (%)" if percentual else ""),
+                    showgrid=True, gridcolor=GRADE,
+                    title_font=dict(color=TINTA_FRACA),
+                    # A faixa considera o mínimo real porque sobra pode ser NEGATIVA —
+                    # ancorar em zero cortaria a barra do município deficitário.
+                    range=[minimo - folga * 0.15, maximo + folga])
+                fig.update_yaxes(showgrid=False)
+                fig.update_layout(showlegend=False, bargap=.3)
+                st.plotly_chart(fig, use_container_width=True,
+                                config={"displayModeBar": False})
+                st.caption(f"Ordenado por **{crit.rotulo}** · a cor é a classe de "
+                           "viabilidade. Troque o critério acima para reordenar.")
+        # O painel FILTRADO (não o recortado pelo `top`) alimenta a apresentação:
+        # o recorte de exibição não pode virar recorte de seleção sem o usuário pedir.
+        st.session_state["hm_painel_ranqueado"] = filtrado
+        st.session_state["hm_ano_painel"] = ano_foco
+
+        colunas_visiveis = [c for c in [
+            "posicao", "municipio", "uf", "viabilidade", "populacao", "pontos_ip",
+            "cosip_liquida", "cosip_ponto_mes", "cosip_por_habitante",
+            "contraprestacao_mes", "sobra_percentual", "cosip_cobre_energia",
+            "perc_led", "potencia_media_w", "tem_ppp"] if c in ranqueado.columns]
+        st.dataframe(
+            ranqueado[colunas_visiveis], use_container_width=True, hide_index=True,
+            column_config={
+                "posicao": st.column_config.NumberColumn("#", width="small"),
+                "municipio": "Município", "uf": "UF", "viabilidade": "Viabilidade",
+                "populacao": st.column_config.NumberColumn("População", format="%d"),
+                "pontos_ip": st.column_config.NumberColumn("Pontos", format="%d"),
+                "cosip_liquida": st.column_config.NumberColumn("CIP (R$/ano)",
+                                                               format="%.0f"),
+                "cosip_ponto_mes": st.column_config.NumberColumn("CIP R$/ponto.mes",
+                                                                 format="%.2f"),
+                "cosip_por_habitante": st.column_config.NumberColumn("CIP R$/hab.ano",
+                                                                     format="%.2f"),
+                "contraprestacao_mes": st.column_config.NumberColumn("Contrap. R$/mes",
+                                                                     format="%.0f"),
+                "sobra_percentual": st.column_config.NumberColumn("Sobra",
+                                                                  format="percent"),
+                "cosip_cobre_energia": st.column_config.NumberColumn("CIP/energia",
+                                                                     format="percent"),
+                "perc_led": st.column_config.NumberColumn("LED", format="percent"),
+                "potencia_media_w": st.column_config.NumberColumn("W/ponto",
+                                                                  format="%.1f"),
+                "tem_ppp": st.column_config.CheckboxColumn("PPP"),
+            })
+
+        with st.expander("Ver todas as colunas do painel"):
+            st.dataframe(painel, use_container_width=True, hide_index=True)
+
+        st.download_button("⬇️  Baixar carteira (.xlsx)", _excel(filtrado),
                            file_name=f"triagem_carteira_{ano_foco}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument."
                                 "spreadsheetml.sheet", key="hm_dl_cart")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ABA 4 — apresentação comercial (.pptx)
+# ═════════════════════════════════════════════════════════════════════════════
+with aba_apresentacao, _aba_isolada("Apresentação"):
+    # A seleção aqui é INDEPENDENTE da aba Carteira: monta-se apresentação para um
+    # município específico sem antes triar uma UF inteira. A carteira continua
+    # disponível como atalho, para quem acabou de rodar a triagem e quer aproveitá-la.
+    st.markdown("**Escolha os municípios da apresentação** — dois slides cada, mais "
+                "capa e metodologia.")
+
+    entes_ap = _entes()
+    tem_carteira = (st.session_state.get("hm_painel_ranqueado") is not None
+                    and not st.session_state["hm_painel_ranqueado"].empty)
+    origens = ["Buscar municípios", "Usar a seleção da Carteira"]
+    origem_ap = st.radio(
+        "Origem da seleção", origens, horizontal=True, key="hm_ap_origem",
+        label_visibility="collapsed",
+        index=0 if not tem_carteira else 0,
+        help="A busca cobre os 5.570 municípios do cadastro do Tesouro. A segunda "
+             "opção reaproveita o que sobrou dos filtros da aba Carteira.")
+
+    painel_base = None
+    ano_painel = None
+
+    if origem_ap == "Usar a seleção da Carteira":
+        if not tem_carteira:
+            st.info("Nenhuma triagem na sessão. Rode a aba **Carteira** ou use a busca.")
+        else:
+            painel_base = st.session_state["hm_painel_ranqueado"]
+            ano_painel = st.session_state.get("hm_ano_painel")
+            st.caption(f"{len(painel_base)} municípios vindos da triagem de {ano_painel}.")
+    else:
+        c_busca, c_ano = st.columns([3, 1])
+        rotulos = {}
+        if not entes_ap.empty:
+            for _, linha_ente in entes_ap.iterrows():
+                rotulos[f"{linha_ente['ente']}/{linha_ente['uf']}"] = linha_ente["cod_ibge"]
+        escolha_municipios = c_busca.multiselect(
+            "Municípios", sorted(rotulos), key="hm_ap_busca",
+            placeholder="Digite para buscar — ex.: Matozinhos/MG",
+            help="Cada município ocupa 2 slides. Acima de ~20 a apresentação fica "
+                 "longa para uma reunião.")
+        ano_painel = c_ano.selectbox("Exercício", sorted(anos, reverse=True),
+                                     key="hm_ap_ano")
+        codigos_ap = [rotulos[r] for r in escolha_municipios]
+
+        if codigos_ap:
+            if st.button(f"Levantar dados de {len(codigos_ap)} município(s)",
+                         key="hm_ap_levantar", use_container_width=True):
+                despesas_ap = _despesas(tuple(codigos_ap), (ano_painel,))
+                st.session_state["hm_ap_painel"] = indicadores.cruzar(
+                    _cosip(tuple(codigos_ap), (ano_painel,)),
+                    parque, custo_ppp, pot_futura, corte,
+                    tarifa, fator_co2, prazo_ciclo, reajuste,
+                    estimar_sem_bdgd=usar_estimativa,
+                    despesas_declaradas=despesas_ap)
+                st.session_state["hm_ap_painel_ano"] = ano_painel
+            if st.session_state.get("hm_ap_painel") is not None:
+                painel_base = st.session_state["hm_ap_painel"]
+                ano_painel = st.session_state.get("hm_ap_painel_ano", ano_painel)
+                # Mantém apenas o que ainda está selecionado, para que desmarcar um
+                # município na busca o tire da apresentação sem precisar levantar de novo.
+                painel_base = painel_base[
+                    painel_base["codigo_municipio"].astype(str).isin(
+                        [str(c) for c in codigos_ap])]
+        else:
+            st.info("Busque e selecione ao menos um município.")
+
+    # Sem `st.stop()`: ele levanta StopException, que `_aba_isolada` deixa passar de
+    # propósito — pararia o script inteiro e derrubaria as outras abas junto.
+    if painel_base is not None and not painel_base.empty:
+
+        # Aviso de qualidade: slide de cliente não é lugar de dado suspeito.
+        suspeitos = painel_base[
+            painel_base.get("declaracao_implausivel", False).fillna(False).astype(bool)
+            | painel_base.get("potencia_implausivel", False).fillna(False).astype(bool)
+        ] if "declaracao_implausivel" in painel_base.columns else painel_base.iloc[0:0]
+        if not suspeitos.empty:
+            st.warning(
+                f"**{len(suspeitos)} município(s) com dado suspeito** na seleção "
+                f"({', '.join(suspeitos['municipio'].head(5))}"
+                f"{'…' if len(suspeitos) > 5 else ''}). Declaração de CIP implausível "
+                "ou potência média fora da faixa física. Ligue *Só dado plausível* na "
+                "aba Carteira antes de levar isso a um cliente.", icon="⚠️")
+
+        opcoes = painel_base["municipio"].tolist()
+        padrao = [m for m in opcoes if m not in set(suspeitos.get("municipio", []))]
+        escolhidos = st.multiselect(
+            "Confirme quem entra", opcoes, default=padrao, key="hm_ap_mun",
+            help="Municípios com dado suspeito ficam de fora por padrão; inclua "
+                 "manualmente se quiser.")
+
+        publico_rotulos = {
+            "🏛️  Para o município (prefeitura)": apresentacao.PUBLICO_CLIENTE,
+            "💼  Para o time comercial (uso interno)": apresentacao.PUBLICO_COMERCIAL,
+        }
+        publico_escolhido = st.radio(
+            "Tipo de apresentação", list(publico_rotulos), key="hm_ap_publico",
+            horizontal=True,
+            help="A peça para a prefeitura sai no padrão visual do deck de Itabira: "
+                 "contexto, escopos possíveis e, por município, panorama → "
+                 "pré-viabilidade → potenciais impactos → a conta fecha? → soluções "
+                 "digitais. A comercial mostra score de lead, situação contratual e "
+                 "canal de contato — e vem carimbada como uso interno, porque não "
+                 "pode chegar ao município.")
+        publico = publico_rotulos[publico_escolhido]
+        comercial = publico == apresentacao.PUBLICO_COMERCIAL
+
+        if comercial:
+            painel_base = ranking.score_comercial(painel_base)
+            quentes = int((painel_base["temperatura"] == ranking.CLASSE_QUENTE).sum())
+            st.caption(
+                f"{quentes} lead(s) quente(s) de {len(painel_base)}. O score pesa sobra "
+                "da CIP (40%), tamanho do contrato (35%) e parque legado sem PPP (25%); "
+                "quem já tem PPP assinada é rebaixado, e dado suspeito perde metade.")
+
+        c1, c2 = st.columns(2)
+        titulo_ap = c1.text_input(
+            "Título da capa",
+            value=("Carteira de Leads — Iluminação Pública" if comercial
+                   else "Modernização da Iluminação Pública"),
+            key="hm_ap_titulo")
+        subtitulo_ap = c2.text_input(
+            "Subtítulo",
+            value=("Panorama da arrecadação de CIP, do parque instalado e do potencial "
+                   "de modernização."),
+            key="hm_ap_sub")
+
+        selecao = painel_base[painel_base["municipio"].isin(escolhidos)]
+
+        def _contar_slides(quantos: int, com_solucoes: bool) -> int:
+            """Quantos slides a peça terá — o mesmo roteiro de `apresentacao.gerar`."""
+            if comercial:
+                return 2 + quantos + (1 if quantos else 0)   # capa, [carteira], fichas, metodologia
+            com_sobra = 0
+            if com_solucoes and not selecao.empty:
+                sobra = pd.to_numeric(selecao.get("sobra_percentual"), errors="coerce")
+                com_sobra = int((sobra > 0).sum())
+            return 4 + 4 * quantos + com_sobra   # capa, contexto, escopos, metodologia
+
+        incluir_solucoes = True
+        buscar_contatos = False
+        if comercial:
+            buscar_contatos = st.checkbox(
+                "Buscar o canal institucional da prefeitura (site, e-mail, telefone)",
+                value=True, key="hm_ap_contato",
+                help="Procura o portal oficial no padrão municipio.uf.gov.br e lê a "
+                     "página de contato. Acerta a maioria, não todos — Belo Horizonte "
+                     "usa pbh.gov.br e sai em branco. O que não for encontrado fica "
+                     "como campo vazio no slide, para o time preencher.")
+        else:
+            incluir_solucoes = st.checkbox(
+                "Incluir o slide de soluções digitais custeáveis pela sobra da CIP",
+                value=True, key="hm_ap_solucoes",
+                help="Só é gerado para município com sobra positiva: oferecer câmera e "
+                     "Wi-Fi a quem não cobre nem a operação da iluminação seria vender "
+                     "o que a arrecadação não paga.")
+
+        incluir_contratos = st.checkbox(
+            "Incluir no slide o contrato de IP publicado no PNCP", value=True,
+            key="hm_ap_pncp",
+            help="Consulta um município por vez no portal, com pausa entre chamadas "
+                 "para respeitar o limite de taxa — some alguns segundos por município "
+                 "na primeira vez. Depois vem do cache.")
+
+        st.caption(
+            f"{len(selecao)} município(s) · "
+            f"{_contar_slides(len(selecao), incluir_solucoes)} slides · "
+            + ("uso interno do time comercial (score, contato e situação contratual)."
+               if comercial else
+               "público: prefeitura / poder concedente (a peça não expõe margem nem "
+               "ranking comercial)."))
+
+        if st.button("📽️  Gerar apresentação (.pptx)", type="primary",
+                     use_container_width=True, key="hm_ap_go", disabled=selecao.empty):
+            contratos_slide = {}
+            if incluir_contratos:
+                barra = st.progress(0.0, text="Consultando contratos no PNCP…")
+                for indice, (_, linha_mun) in enumerate(selecao.iterrows(), start=1):
+                    achados = _contratos_pncp(str(linha_mun["municipio"]),
+                                              str(linha_mun.get("uf") or ""))
+                    destaque = contratos_ip.principal(achados)
+                    if destaque:
+                        contratos_slide[str(linha_mun["codigo_municipio"])] = destaque
+                    barra.progress(indice / len(selecao),
+                                   text=f"PNCP: {linha_mun['municipio']} "
+                                        f"({indice}/{len(selecao)})")
+                barra.empty()
+                achou = len(contratos_slide)
+                st.caption(f"Contrato encontrado em {achou} de {len(selecao)} "
+                           "municípios — os demais entram no slide sem essa faixa.")
+            fichas_contato = {}
+            if buscar_contatos:
+                barra_c = st.progress(0.0, text="Procurando o portal das prefeituras…")
+                for indice, (_, linha_mun) in enumerate(selecao.iterrows(), start=1):
+                    ficha = _contato_prefeitura(str(linha_mun["municipio"]),
+                                                str(linha_mun.get("uf") or ""),
+                                                str(linha_mun["codigo_municipio"]))
+                    if ficha.get("site"):
+                        fichas_contato[str(linha_mun["codigo_municipio"])] = ficha
+                    barra_c.progress(indice / len(selecao),
+                                     text=f"Portal: {linha_mun['municipio']} "
+                                          f"({indice}/{len(selecao)})")
+                barra_c.empty()
+                st.caption(f"Canal institucional localizado em {len(fichas_contato)} de "
+                           f"{len(selecao)} municípios — confira antes de acionar.")
+
+            with st.spinner("Montando os slides…"):
+                arquivo = apresentacao.gerar(
+                    selecao, titulo=titulo_ap, subtitulo=subtitulo_ap,
+                    contratos_pncp=contratos_slide, publico=publico,
+                    contatos=fichas_contato,
+                    incluir_solucoes=incluir_solucoes,
+                    premissas={
+                        "custo por ponto": f"R$ {custo_ppp:,.2f}/ponto.mês".replace(
+                            ",", "X").replace(".", ",").replace("X", "."),
+                        "potência de referência": f"{pot_futura:.0f} W",
+                        "tarifa": f"R$ {tarifa:.4f}/kWh".replace(".", ","),
+                        "prazo": f"{prazo_ciclo} anos",
+                        "reajuste": f"{reajuste:.1%} a.a.".replace(".", ","),
+                        "exercício": str(ano_painel),
+                    })
+                st.session_state["hm_ap_arquivo"] = arquivo
+                registrar_acao("apresentacao_gerada",
+                               alvo=f"{len(selecao)} municípios",
+                               detalhe=f"exercício {ano_painel}")
+            st.success("Apresentação com "
+                       f"{_contar_slides(len(selecao), incluir_solucoes)} slides pronta.")
+
+        if st.session_state.get("hm_ap_arquivo"):
+            st.download_button(
+                "⬇️  Baixar apresentação (.pptx)",
+                data=st.session_state["hm_ap_arquivo"],
+                file_name=(f"Carteira de Leads - {ano_painel}.pptx" if comercial
+                           else f"Carteira IP - {ano_painel}.pptx"),
+                mime="application/vnd.openxmlformats-officedocument."
+                     "presentationml.presentation",
+                use_container_width=True, key="hm_ap_dl")
+
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -210,3 +210,109 @@ Requer GDAL (`ogr2ogr` + `ogrinfo`) — OSGeo4W ou QGIS. Ver `app/requirements-e
 ~7 min, porque o Drive File Stream baixa sob demanda. Por isso o ETL ordena da menor base
 para a maior (valor entregue mais cedo) e `--paralelo` vale a pena — são conexões
 simultâneas, não trabalho de processador.
+
+
+## Despesa declarada, contratos, ranking e apresentação (01/09/2026)
+
+O Hub passou a olhar também o **outro lado da conta**. Até aqui ele cruzava a receita
+de COSIP com o parque; sem a despesa, a "sobra" era uma conta de um lado só.
+
+### `despesas.py` — SICONFI, DCA Anexo I-E
+
+Mesma API do módulo de receita, outro anexo: despesa por função e subfunção.
+
+- **25.752 Energia Elétrica** e **15.452 Serviços Urbanos** são **envelopes**, não gasto
+  de IP. O primeiro soma iluminação com escolas, prédios e poços; o segundo soma IP com
+  limpeza, capina, praças e cemitério. A classificação funcional nacional não tem
+  subfunção de iluminação pública, ponto final.
+- **45% dos municípios não declaram a função 25** — medido em 60 municípios de MG,
+  exercício 2023 (31 com 25.752, 27 sem função 25, 2 só com a função 25 agregada).
+  Belo Horizonte e Uberlândia estão no grupo do meio. Tratar essa ausência como "não
+  gastou com energia" seria erro grosseiro: o módulo cai para o envelope disponível e
+  grava a origem em `origem_despesa_energia`, no mesmo espírito de `origem_pontos`.
+- **A coluna padrão é "Despesas Liquidadas"**, não empenhadas nem pagas: liquidação é o
+  reconhecimento do fato gerador e é o estágio comparável com a receita arrecadada do
+  Anexo I-C. Em Mateus Leme/2023 a diferença entre empenhado e pago foi de 24% só na
+  energia — escolher errado distorce a conta.
+- **O anexo não tem linha "Total Geral"**: o total é a soma de "Despesas Exceto
+  Intraorçamentárias" com "Despesas Intraorçamentárias".
+
+Dois indicadores nascem daí, em `indicadores.cruzar(despesas_declaradas=...)`:
+
+| Indicador | O que responde |
+|---|---|
+| `cosip_cobre_energia` | COSIP ÷ despesa de energia. "A CIP paga a conta de luz?" Mateus Leme/2023: **71,5%**, não paga. |
+| `ip_sobre_energia_declarada` | Custo de energia da IP estimado pela BDGD ÷ despesa declarada. Teste de consistência: a IP é parte da conta, nunca mais que ela. Mateus Leme deu 29,8%, faixa plausível. |
+
+Ambos só são calculados onde há a função 25. Com o denominador vindo de Serviços
+Urbanos a razão não teria significado, e o módulo prefere não responder a responder errado.
+
+### `contratos_ip.py` — PNCP
+
+Resolve pelo outro lado: o contrato, com objeto em texto livre e valor global. Três
+limitações medidas na API, todas tratadas e nenhuma eliminável:
+
+1. **Busca fuzzy** — casa por relevância, não por termo obrigatório. Entre os contratos
+   de IP de MG veio um de cessão de "Salão de Festas". Daí o filtro `_e_relevante`.
+2. **`municipio_id` do PNCP não é o código IBGE** (BH é 2310 lá e 3106200 no IBGE). O
+   casamento é por nome normalizado + UF, com o risco de homônimo que isso carrega.
+3. **Rate limiting agressivo** — chamadas seguidas caem com `ConnectionReset`, sem
+   status HTTP. Exige sessão com retry, backoff e pausa entre chamadas.
+
+Por isso o resultado é **evidência para conferência humana**, não número de cálculo. O
+`valor_global` cobre todo o prazo do contrato, não um ano, e município grande costuma
+ter vários contratos vigentes.
+
+### `ranking.py`
+
+Critérios de ordenação da carteira, cada um com o **sentido natural** da sua ordenação:
+parque com pouco LED e CIP que cobre pouco da conta ordenam do **menor** para o maior,
+porque ali está a oportunidade, não o pior colocado. Município sem o dado do critério
+vai sempre para o fim — ausência de informação não é desempenho.
+
+### `apresentacao.py`
+
+Gera o `.pptx` para levar à prefeitura, no **padrão visual do deck de Itabira**
+("Estruturação da PPP de Cidade Inteligente", 05/08/2026), adotado em 02/09/2026:
+
+```
+Capa → De onde vem esta análise → Possíveis escopos
+  → [ município: panorama | pré-viabilidade | potenciais impactos | a conta fecha? |
+      soluções digitais ] × N
+  → Metodologia e fontes
+```
+
+- **A marca da peça é Houer, e isso é exceção deliberada** à diretriz de 30/08/2026 que
+  tirou a marca do portal. Vale só para o `.pptx`, que é material comercial apresentado
+  pela consultoria — planilhas, relatórios e a UI seguem como Plataforma IP.
+- **A paleta foi amostrada pixel a pixel do deck original**, não estimada: degradê
+  `#003264 → #00508E` na faixa-título, verde `#00FF29` para arrecadação, vermelho
+  `#FF3131` para despesa, fundo `#F6F6F6` com arcos tênues. Trocar por "azul
+  corporativo genérico" descaracteriza a peça ao lado das que a equipe já entregou.
+- **Tudo em vetor, inclusive o mapa e a silhueta urbana**, desenhados com `build_freeform`
+  e formas nativas (`malhas.carregar_contorno_uf` traz o estado como um polígono só —
+  empilhar 800 polígonos municipais por slide inviabilizaria o arquivo). Nada de PNG: o
+  cliente edita qualquer elemento, o texto continua selecionável e não é preciso
+  instalar o `kaleido`. Os ícones são emblemas montados com formas nativas até a equipe
+  passar a biblioteca licenciada — decisão do usuário em 02/09/2026.
+- **O percentual do slide de pré-viabilidade replica o critério do deck**:
+  `(arrecadação − despesa declarada) / arrecadação`, para manter comparabilidade com as
+  peças já entregues. A ressalva sai no rodapé do próprio slide, porque é material: a
+  despesa declarada é o custeio de hoje, e a contraprestação da PPP — com CAPEX
+  amortizado, telegestão e reinvestimento — é estruturalmente maior. Quem desconta a
+  contraprestação é `sobra_percentual`, no slide "A conta fecha?".
+- **Os números do potencial ficam só no slide de impactos.** Quando o slide da p13
+  entrou, os mesmos seis cartões passaram a aparecer duas vezes no mesmo deck; o slide
+  de fechamento foi enxugado para o custo do serviço, o contrato atual do PNCP e a
+  frase-síntese. Travado em teste.
+- **A tese muda conforme o parque.** Onde a economia de energia fica abaixo de 5%, o
+  slide de impactos troca de argumento: em vez de estampar "economia R$ 0" três vezes,
+  mostra parque em LED, potência média e conta de energia atual. Em MG isso é a regra —
+  75,6% do parque estadual já é LED, e Mateus Leme tem 95,8% de LED com 54,6 W médios,
+  abaixo da potência de referência.
+- **A frase de fechamento é condicionada ao número.** Sobra negativa não vira silêncio
+  nem promessa: o slide diz que a CIP não banca o serviço nas premissas adotadas e que
+  viabilizar exige revisar a lei de custeio, ajustar escopo ou prever contrapartida.
+- Densidade (pontos por mil habitantes) foi deliberadamente deixada **fora** do slide:
+  ela estoura a faixa plausível sempre que o cadastro da distribuidora está inflado, e
+  peça de cliente não é lugar de exibir indicador que denuncia problema de base.

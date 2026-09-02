@@ -24,6 +24,11 @@ from . import config
 
 URL = ("https://servicodados.ibge.gov.br/api/v3/malhas/estados/{uf}"
        "?formato=application/vnd.geo+json&intrarregiao=municipio&qualidade=minima")
+# Mesma API sem `intrarregiao`: devolve o contorno do estado como UM polígono, em vez
+# das centenas de polígonos municipais. MG sai com 372 vértices em 8 KB — é o que
+# permite desenhar o mapa em vetor no PowerPoint sem empilhar 800 formas no slide.
+URL_CONTORNO = ("https://servicodados.ibge.gov.br/api/v3/malhas/estados/{uf}"
+                "?formato=application/vnd.geo+json&qualidade=minima")
 TIMEOUT = 60
 
 _MEMORIA: Dict[str, Dict[str, Any]] = {}
@@ -75,6 +80,66 @@ def carregar(uf: str) -> Optional[Dict[str, Any]]:
 
     _MEMORIA[uf] = malha
     return malha
+
+
+def _caminho_contorno(uf: str):
+    return config.DADOS / "malhas" / f"contorno_{uf.upper()}.geojson"
+
+
+def carregar_contorno_uf(uf: str) -> Optional[Dict[str, Any]]:
+    """
+    Contorno do estado como um único polígono, cacheado em disco.
+
+    Usado pelo gerador de apresentação para desenhar o mapa de localização em vetor.
+    Como toda a família de malhas, devolve None em vez de levantar: mapa é adorno,
+    e a falta de rede não pode impedir a geração do arquivo.
+    """
+    uf = uf.strip().upper()
+    chave = f"_contorno_{uf}"
+    if chave in _MEMORIA:
+        return _MEMORIA[chave]
+
+    destino = _caminho_contorno(uf)
+    if destino.exists():
+        try:
+            with open(destino, "r", encoding="utf-8") as fh:
+                malha = json.load(fh)
+            _MEMORIA[chave] = malha
+            return malha
+        except Exception:
+            pass
+
+    try:
+        resp = requests.get(URL_CONTORNO.format(uf=uf), timeout=TIMEOUT)
+        resp.raise_for_status()
+        malha = resp.json()
+    except Exception:
+        return None
+
+    if not malha.get("features"):
+        return None
+
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        with open(destino, "w", encoding="utf-8") as fh:
+            json.dump(malha, fh)
+    except Exception:
+        pass
+
+    _MEMORIA[chave] = malha
+    return malha
+
+
+def geometria_do_municipio(uf: str, cod_ibge: str) -> Optional[Dict[str, Any]]:
+    """Geometria GeoJSON de um município dentro da malha da sua UF, ou None."""
+    malha = carregar(uf)
+    if not malha:
+        return None
+    alvo = str(cod_ibge).strip()
+    for feicao in malha.get("features", []):
+        if str(feicao.get("id") or "").strip() == alvo:
+            return feicao.get("geometry")
+    return None
 
 
 def codigos_da_malha(malha: Dict[str, Any]) -> set:

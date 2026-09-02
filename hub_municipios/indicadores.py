@@ -121,6 +121,9 @@ COLUNAS_INDICADORES = [
     "prazo_concessao_anos", "reajuste_anual", "economia_ciclo_reais",
     "custo_energia_ciclo_reais",
     "fator_emissao", "co2_evitado_t_ano",
+    # despesa declarada ao SICONFI (Anexo I-E) — envelope, não gasto de IP puro
+    "despesa_energia_declarada", "envelope_ip_declarado", "origem_despesa_energia",
+    "despesa_energia_ponto_mes", "cosip_cobre_energia", "ip_sobre_energia_declarada",
     # classificação e qualidade do dado
     "viabilidade", "tem_ppp", "concessionaria_ppp", "ano_ppp",
     "declaracao_implausivel", "consumo_bdgd_suspeito", "potencia_implausivel",
@@ -193,6 +196,67 @@ def _numerica(df: pd.DataFrame, coluna: str) -> pd.Series:
     return pd.to_numeric(df[coluna], errors="coerce")
 
 
+def _aplicar_despesa_declarada(
+    df: pd.DataFrame,
+    despesas_declaradas: Optional[pd.DataFrame],
+    pontos_validos: pd.Series,
+    cosip_liq: pd.Series,
+) -> None:
+    """
+    Cruza a despesa declarada ao SICONFI (Anexo I-E) com a receita e a estimativa.
+
+    Dois indicadores saem daqui, e são de naturezas diferentes:
+
+      - `cosip_cobre_energia` = COSIP arrecadada ÷ despesa de energia declarada. É a
+        resposta à pergunta que toda prefeitura faz — "a CIP paga a conta de luz?".
+        Em Mateus Leme/2023 deu 71,5%: não paga.
+      - `ip_sobre_energia_declarada` = custo de energia de IP estimado pela BDGD ÷
+        despesa de energia declarada. É teste de consistência: a IP costuma responder
+        por parte relevante da conta de energia de um município, mas **nunca por mais
+        que 100%** — passar disso significa que a estimativa da BDGD, a tarifa ou a
+        declaração ao Tesouro estão erradas, e o número não deve ser usado sem apurar.
+
+    Ambos só são calculados quando o município declarou a função 25 (Energia). Onde
+    o envelope veio de 15.452 (Serviços Urbanos), a razão não teria significado — o
+    denominador incluiria limpeza urbana, capina e cemitério. Ver `despesas.py`, que
+    mede isso em 45% dos municípios da amostra de MG.
+    """
+    for col in ("despesa_energia_declarada", "envelope_ip_declarado",
+                "origem_despesa_energia", "despesa_energia_ponto_mes",
+                "cosip_cobre_energia", "ip_sobre_energia_declarada"):
+        df[col] = pd.NA
+
+    if despesas_declaradas is None or despesas_declaradas.empty:
+        return
+
+    dd = despesas_declaradas.copy()
+    dd["codigo_municipio"] = dd["codigo_municipio"].astype(str)
+    dd = dd[dd["status"] == "OK"]
+    if dd.empty:
+        return
+    dd = dd.drop_duplicates(subset=["codigo_municipio", "ano_exercicio"], keep="last")
+
+    chave = ["codigo_municipio", "ano_exercicio"]
+    colunas = chave + ["despesa_energia_eletrica", "envelope_ip_reais",
+                       "origem_despesa_energia"]
+    df_chave = df[chave].copy()
+    df_chave["ano_exercicio"] = pd.to_numeric(df_chave["ano_exercicio"], errors="coerce")
+    dd["ano_exercicio"] = pd.to_numeric(dd["ano_exercicio"], errors="coerce")
+    juntado = df_chave.merge(dd[colunas], on=chave, how="left")
+
+    energia = pd.to_numeric(juntado["despesa_energia_eletrica"], errors="coerce")
+    df["despesa_energia_declarada"] = energia.values
+    df["envelope_ip_declarado"] = pd.to_numeric(
+        juntado["envelope_ip_reais"], errors="coerce").values
+    df["origem_despesa_energia"] = juntado["origem_despesa_energia"].values
+
+    energia_valida = energia.replace(0, pd.NA)
+    df["despesa_energia_ponto_mes"] = (energia / (pontos_validos.values * 12.0)).values
+    df["cosip_cobre_energia"] = (cosip_liq.values / energia_valida).values
+    custo_ip = _numerica(df, "custo_energia_ano")
+    df["ip_sobre_energia_declarada"] = (custo_ip.values / energia_valida).values
+
+
 def cruzar(
     cosip: pd.DataFrame,
     parque: Optional[pd.DataFrame] = None,
@@ -204,6 +268,7 @@ def cruzar(
     prazo_concessao_anos: int = config.PRAZO_CONCESSAO_ANOS_PADRAO,
     reajuste_anual: float = config.REAJUSTE_ANUAL_PADRAO,
     estimar_sem_bdgd: bool = True,
+    despesas_declaradas: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Junta COSIP (uma linha por município/ano) ao parque de IP (uma linha por município)
@@ -343,6 +408,8 @@ def cruzar(
         df["tem_ppp"] = False
         df["concessionaria_ppp"] = pd.NA
         df["ano_ppp"] = pd.NA
+
+    _aplicar_despesa_declarada(df, despesas_declaradas, pontos_validos, cosip_liq)
 
     df["viabilidade"] = _classificar(df, corte_arrecadacao)
 

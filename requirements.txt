@@ -19,3 +19,9 @@ pyarrow>=14.0.0
 # Ambas são puras e não tocam o resolvedor de scikit-learn/joblib.
 gspread>=6.0.0
 google-auth>=2.28.0
+
+# Apresentação comercial da carteira (.pptx) — Hub de Municípios. Dependência pura,
+# sem binário nativo, e não toca o resolvedor de scikit-learn/joblib. O gerador desenha
+# tudo em vetor (inclusive o mapa), justamente para NÃO precisar do kaleido, que pesa
+# ~100 MB e só serviria para rasterizar figura do Plotly.
+python-pptx>=1.0.0
