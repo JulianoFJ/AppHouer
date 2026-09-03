@@ -7,15 +7,33 @@
 # resultado é um híbrido com texto claro sobre campo branco. As cores abaixo são as
 # mesmas que app.py já injeta, então isto apenas replica no deploy o comportamento
 # que já existe localmente.
-#
-# `primaryColor` é deliberadamente omitido para não alterar a cor dos controles nos
-# módulos existentes (Simulação NBR, Análise de Cadastro, Planilha de Engenharia).
 
 [theme]
 base = "dark"
 backgroundColor = "#0b111e"
-secondaryBackgroundColor = "#12192b"
 textColor = "#f8fafc"
+
+# Superfície dos campos editáveis (o Streamlit usa `secondaryBackgroundColor` como
+# preenchimento de input, select, textarea e number_input). Era #12192b, a dois passos
+# do fundo #0b111e: sem borda e sem contraste, campo digitável ficava indistinguível
+# de texto estático — o usuário não percebia que dava para editar. Subir a superfície
+# e ligar a borda foi o que separou "campo" de "fundo".
+secondaryBackgroundColor = "#182238"
+
+# `showWidgetBorder` desenha o contorno em todo widget de entrada da plataforma, o que
+# antes era remendado caso a caso (a tela de login tinha o próprio CSS só para isso).
+showWidgetBorder = true
+borderColor = "#2f3f5c"
+
+# `primaryColor` era omitido de propósito para não mexer nos controles das ferramentas
+# existentes — mas o efeito colateral era o vermelho padrão do Streamlit em botão
+# primário, slider e checkbox, que não é cor da plataforma. Passa a ser o teal da
+# identidade, e a exceção local do formulário de login deixa de ser necessária.
+primaryColor = "#00A9E0"
+linkColor = "#4FC3F0"
+
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
 
 [server]
 # planilhas de cadastro e BDGD passam folgadamente de 200 MB no upload

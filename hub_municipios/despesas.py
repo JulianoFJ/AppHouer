@@ -277,6 +277,20 @@ def gravar_cache(df: pd.DataFrame) -> None:
         pass
 
 
+def pendencias_no_cache(codigos: Sequence[str], anos: Sequence[int],
+                        coluna: str = COLUNA_PADRAO) -> int:
+    """Quantos pares (município, ano) ainda exigiriam ida à API. Ver o par em `siconfi`."""
+    codigos = [c for c in (siconfi.so_digitos(x) for x in codigos) if len(c) == 7]
+    if not codigos:
+        return 0
+    cache = carregar_cache()
+    if cache.empty:
+        return len(codigos) * len(list(anos))
+    validos = cache[(cache["coluna_execucao"] == coluna) & (cache["status"] != "ERRO_API")]
+    ja_tem = set(zip(validos["codigo_municipio"], validos["ano_exercicio"]))
+    return sum(1 for a in anos for c in codigos if (c, a) not in ja_tem)
+
+
 def consultar_com_cache(
     codigos: Sequence[str],
     anos: Sequence[int],

@@ -841,9 +841,31 @@ with aba_carteira, _aba_isolada("Carteira"):
             except Exception as exc:
                 st.error(f"Não foi possível ler a planilha: {exc}")
 
-    if codigos and st.button("Executar triagem", type="primary", key="hm_go"):
-        st.session_state["hm_codigos"] = codigos
-        registrar_acao("carteira_triada", alvo=f"{len(codigos)} municípios")
+    # Botão só quando há rede a pagar. A triagem de uma UF já consultada é leitura de
+    # parquet local — exigir clique ali era pedir uma confirmação para nada, e era o
+    # que fazia a carteira parecer lenta: trocar de UF não mostrava nada até clicar.
+    # Quando falta município no cache, o botão volta, dizendo quantos serão buscados.
+    if codigos:
+        # A contagem tem de cobrir as DUAS consultas que a triagem dispara — COSIP e,
+        # se a caixa estiver marcada, a despesa declarada. Olhar só a primeira deixaria
+        # a página disparar sozinha centenas de chamadas do Anexo I-E, que é justamente
+        # a consulta cara. E o exercício considerado é o que será usado de fato, não a
+        # lista inteira da barra lateral.
+        ano_previsto = st.session_state.get("hm_ano_foco")
+        if ano_previsto not in anos:
+            ano_previsto = max(anos)
+        faltam = siconfi.pendencias_no_cache(codigos, [ano_previsto])
+        if st.session_state.get("hm_despesa", True):
+            faltam += despesas.pendencias_no_cache(codigos, [ano_previsto])
+        if faltam == 0:
+            if st.session_state.get("hm_codigos") != codigos:
+                st.session_state["hm_codigos"] = codigos
+                registrar_acao("carteira_triada", alvo=f"{len(codigos)} municípios")
+            st.caption("✓ Dados em cache local — triagem carregada automaticamente.")
+        elif st.button(f"Executar triagem — buscar {faltam} consulta(s) no SICONFI",
+                       type="primary", key="hm_go"):
+            st.session_state["hm_codigos"] = codigos
+            registrar_acao("carteira_triada", alvo=f"{len(codigos)} municípios")
 
     if st.session_state.get("hm_codigos"):
         linha_ano, linha_desp = st.columns([1, 2])
@@ -1063,8 +1085,21 @@ with aba_apresentacao, _aba_isolada("Apresentação"):
         codigos_ap = [rotulos[r] for r in escolha_municipios]
 
         if codigos_ap:
-            if st.button(f"Levantar dados de {len(codigos_ap)} município(s)",
-                         key="hm_ap_levantar", use_container_width=True):
+            # Mesma regra da Carteira: seleção já cacheada monta o painel na hora; o
+            # botão fica para o caso em que há rede a pagar. Aqui a seleção é manual e
+            # curta (2 slides por município), então o normal é o caminho automático.
+            faltam_ap = (siconfi.pendencias_no_cache(codigos_ap, [ano_painel])
+                         + despesas.pendencias_no_cache(codigos_ap, [ano_painel]))
+            assinatura = (tuple(codigos_ap), ano_painel)
+            levantar = False
+            if faltam_ap == 0:
+                levantar = st.session_state.get("hm_ap_assinatura") != assinatura
+            else:
+                levantar = st.button(
+                    f"Levantar dados de {len(codigos_ap)} município(s) — "
+                    f"{faltam_ap} consulta(s) no SICONFI",
+                    key="hm_ap_levantar", use_container_width=True)
+            if levantar:
                 despesas_ap = _despesas(tuple(codigos_ap), (ano_painel,))
                 st.session_state["hm_ap_painel"] = indicadores.cruzar(
                     _cosip(tuple(codigos_ap), (ano_painel,)),
@@ -1073,6 +1108,7 @@ with aba_apresentacao, _aba_isolada("Apresentação"):
                     estimar_sem_bdgd=usar_estimativa,
                     despesas_declaradas=despesas_ap)
                 st.session_state["hm_ap_painel_ano"] = ano_painel
+                st.session_state["hm_ap_assinatura"] = assinatura
             if st.session_state.get("hm_ap_painel") is not None:
                 painel_base = st.session_state["hm_ap_painel"]
                 ano_painel = st.session_state.get("hm_ap_painel_ano", ano_painel)

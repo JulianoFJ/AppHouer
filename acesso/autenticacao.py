@@ -271,19 +271,11 @@ def _tela_login() -> None:
               max-width: 420px; margin: 0 auto; }
           .block-container { max-width: 560px; }
 
-          /* Campos com contorno: sobre o fundo do cartão eles somem sem borda. */
-          [data-testid="stForm"] input {
-              background: #0b111e !important; border: 1px solid #24304a !important; }
-
-          /* O botão primário sai vermelho porque `.streamlit/config.toml` omite
-             `primaryColor` de propósito — definir o tema global mudaria a cor dos
-             controles das quatro ferramentas. Por isso a cor é aplicada aqui, com
-             escopo restrito ao formulário de login. */
-          [data-testid="stForm"] [data-testid*="FormSubmit"] button,
-          [data-testid="stForm"] button[data-testid*="FormSubmit"] {
-              background: var(--marca-teal, #00A9E0) !important;
-              border-color: var(--marca-teal, #00A9E0) !important;
-              color: #06121d !important; font-weight: 700 !important; }
+          /* O contorno dos campos e a cor do botão primário eram remendados aqui,
+             porque o tema global não tinha `primaryColor` nem borda de widget. Desde
+             que os dois passaram para `.streamlit/config.toml` (e o estilo de campo
+             para `app.py`), esta tela herda o mesmo tratamento das outras — só
+             sobrou o que é específico dela: esconder a sidebar e enquadrar o cartão. */
         </style>
         """,
         unsafe_allow_html=True,

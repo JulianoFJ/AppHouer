@@ -629,27 +629,34 @@ with st.sidebar:
 
     st.markdown('---')
     st.markdown('### 📍 Localização do Projeto')
-    endereco_busca = st.text_input('Endereço ou Rua', placeholder='Ex: Rua Joaquim Murtinho, Cuiabá')
-    
-    if st.button('🔍 Localizar no Mapa'):
-        if GOOGLE_MAPS_API_KEY and endereco_busca:
+    endereco_busca = st.text_input(
+        'Endereço ou Rua', placeholder='Ex: Rua Joaquim Murtinho, Cuiabá',
+        help='Digite e pressione Enter — a localização é feita na hora.')
+
+    # Sem botão "Localizar": digitar e teclar Enter já localiza. A chamada continua
+    # sendo uma por endereço, e não uma por rerun, porque o cache é a chave do endereço
+    # — mover um slider da página não gasta cota da API do Google.
+    @st.cache_data(show_spinner='Localizando endereço…', max_entries=64)
+    def _geocodificar(endereco: str):
+        location = GoogleV3(api_key=GOOGLE_MAPS_API_KEY).geocode(endereco, timeout=10)
+        if location is None:
+            return None
+        return location.latitude, location.longitude, location.address
+
+    endereco_busca = (endereco_busca or '').strip()
+    if endereco_busca:
+        if not GOOGLE_MAPS_API_KEY:
+            st.warning("Defina `GOOGLE_MAPS_API_KEY` em `st.secrets` (deploy) ou variável de ambiente (local).")
+        else:
             try:
-                geolocator = GoogleV3(api_key=GOOGLE_MAPS_API_KEY)
-                location = geolocator.geocode(endereco_busca, timeout=10)
-                if location:
-                    st.session_state.lat = location.latitude
-                    st.session_state.lon = location.longitude
-                    st.session_state.address = location.address
-                    st.success(f"📍 Localizado: {location.address}")
+                achado = _geocodificar(endereco_busca)
+                if achado:
+                    st.session_state.lat, st.session_state.lon, st.session_state.address = achado
+                    st.success(f"📍 Localizado: {st.session_state.address}")
                 else:
                     st.warning("Endereço não encontrado.")
             except Exception as e:
                 st.error(f"Erro na geocodificação: {e}")
-        else:
-            if not GOOGLE_MAPS_API_KEY:
-                st.warning("Defina `GOOGLE_MAPS_API_KEY` em `st.secrets` (deploy) ou variável de ambiente (local).")
-            else:
-                st.info("Insira um endereço para localizar.")
 
     st.markdown('### ⚡ Eficientização')
     potencia_atual = st.number_input('Potência Atual (W)', min_value=0.0, value=250.0, step=10.0, help="Potência da luminária instalada atualmente (ex: Sódio 250W, 400W)")

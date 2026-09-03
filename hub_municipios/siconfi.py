@@ -167,6 +167,28 @@ def carregar_entes(forcar: bool = False) -> pd.DataFrame:
     return df
 
 
+def entes_em_cache() -> pd.DataFrame:
+    """
+    Cadastro de municípios **sem tocar na rede**: só o parquet versionado no pacote.
+
+    `carregar_entes` cai para a API do Tesouro quando o parquet não existe, o que é o
+    comportamento certo para o Hub — mas errado para quem só quer preencher um campo de
+    município. A página de Amostragem usa esta versão para que abrir a ferramenta nunca
+    dispare uma chamada de rede, e para que a ausência do parquet degrade a UI (volta o
+    campo de texto livre) em vez de travá-la esperando um timeout.
+    """
+    global _ENTES
+    if _ENTES is not None:
+        return _ENTES
+    if not config.ENTES_CACHE.exists():
+        return pd.DataFrame(columns=["cod_ibge", "ente", "uf"])
+    try:
+        _ENTES = pd.read_parquet(config.ENTES_CACHE)
+    except Exception:
+        return pd.DataFrame(columns=["cod_ibge", "ente", "uf"])
+    return _ENTES
+
+
 def buscar_municipio(termo: str, uf: Optional[str] = None) -> pd.DataFrame:
     """Resolve código IBGE (7 dígitos) ou nome parcial em municípios."""
     df = carregar_entes()
@@ -377,6 +399,26 @@ def gravar_cache(df: pd.DataFrame) -> None:
         combinado.to_parquet(_caminho_cache(), index=False)
     except Exception:
         pass
+
+
+def pendencias_no_cache(codigos: Sequence[str], anos: Sequence[int]) -> int:
+    """
+    Quantos pares (município, ano) exigiriam ida à API do Tesouro.
+
+    Serve para a UI decidir entre consultar na hora ou pedir confirmação: quando o
+    número é zero, `consultar_com_cache` é leitura de parquet local e não há motivo
+    para exigir um clique em "Executar"; quando não é, cada pendência custa uma
+    chamada de rede e o usuário precisa saber no que está se metendo antes de mandar.
+    """
+    codigos = [c for c in (so_digitos(x) for x in codigos) if len(c) == 7]
+    if not codigos:
+        return 0
+    cache = carregar_cache()
+    if cache.empty:
+        return len(codigos) * len(list(anos))
+    validos = cache[cache["status"] != "ERRO_API"]
+    ja_tem = set(zip(validos["codigo_municipio"], validos["ano_exercicio"]))
+    return sum(1 for a in anos for c in codigos if (c, a) not in ja_tem)
 
 
 def consultar_com_cache(

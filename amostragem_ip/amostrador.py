@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from cadastro_ip import coordenadas
+
 from .nbr5426 import PlanoAmostragem
 from .vias import (
     ROTULO_SEM_CLASSE,
@@ -53,10 +55,11 @@ from .vias import (
 
 
 # Faixa plausível de coordenadas em território brasileiro. Cadastro municipal traz com
-# frequência lat/long trocados, zerados ou em projeção UTM — coordenada fora daqui é
-# tratada como ausente em vez de arrastar o k-means para o meio do oceano.
-LAT_MIN, LAT_MAX = -34.0, 6.0
-LON_MIN, LON_MAX = -74.5, -33.0
+# frequência lat/long trocados, zerados ou em projeção UTM — o que for recuperável é
+# recuperado em `cadastro_ip.coordenadas`; o que sobra fora daqui é tratado como
+# ausente, em vez de arrastar o k-means para o meio do oceano.
+LAT_MIN, LAT_MAX = coordenadas.LAT_MIN, coordenadas.LAT_MAX
+LON_MIN, LON_MAX = coordenadas.LON_MIN, coordenadas.LON_MAX
 
 GRUPO_ESTRUTURAL = "estrutural"
 GRUPO_QUALIDADE = "qualidade"
@@ -112,19 +115,26 @@ class ResultadoAmostragem:
 
 
 # ── Preparação da base ────────────────────────────────────────────────────────
-def preparar_base(df: pd.DataFrame, colunas: dict[str, str]) -> tuple[pd.DataFrame, list[str]]:
+def preparar_base(df: pd.DataFrame, colunas: dict[str, str], uf: str | None = None,
+                  zona_utm: int | None = None) -> tuple[pd.DataFrame, list[str]]:
     """
     Normaliza o cadastro para o sorteio, criando as colunas auxiliares com prefixo `_`.
 
     Args:
         df: cadastro do município, como veio da planilha.
         colunas: conceito → nome real da coluna. Conceitos usados: `id_ponto`,
-            `logradouro`, `bairro`, `classe_via`, `latitude`, `longitude`.
-            Todos são opcionais exceto na prática `classe_via` (sem ela não há
-            estratificação por classe) e `logradouro` (sem ele não há via principal).
+            `logradouro`, `bairro`, `classe_via`, `latitude`, `longitude` e
+            `coordenadas` (coluna única com o par, que prevalece sobre o par de
+            colunas quando informada). Todos são opcionais exceto na prática
+            `classe_via` (sem ela não há estratificação por classe) e `logradouro`
+            (sem ele não há via principal).
+        uf: sigla do estado. Usada só para desambiguar a zona de um cadastro em UTM.
+        zona_utm: zona UTM confirmada pelo usuário, quando o dado sozinho não decide.
 
     Returns:
-        (base preparada, lista de ressalvas encontradas na preparação)
+        (base preparada, lista de ressalvas encontradas na preparação). A base carrega
+        em `.attrs` o formato de coordenada reconhecido e as zonas UTM que o dado não
+        permitiu distinguir — é o que deixa a UI perguntar em vez de adivinhar.
     """
     from cadastro_ip.normalizacao import chave_logradouro, limpar_id_serie
 
@@ -192,10 +202,33 @@ def preparar_base(df: pd.DataFrame, colunas: dict[str, str]) -> tuple[pd.DataFra
             "eles formam um estrato próprio e continuam elegíveis ao sorteio."
         )
 
+    # Coordenadas: a leitura fica em `cadastro_ip.coordenadas` porque cadastro municipal
+    # não tem um formato só — vírgula decimal, grau-minuto-segundo, par em célula única,
+    # UTM e eixos trocados são todos casos reais, e `pd.to_numeric` descartaria todos em
+    # silêncio. Aqui só se decide o que fazer com o que não deu para recuperar.
+    col_unica = colunas.get("coordenadas")
     col_lat, col_lon = colunas.get("latitude"), colunas.get("longitude")
-    if col_lat in base.columns and col_lon in base.columns:
-        base["_lat"] = pd.to_numeric(base[col_lat], errors="coerce")
-        base["_lon"] = pd.to_numeric(base[col_lon], errors="coerce")
+    # A coluna única só prevalece se o **dado** for mesmo um par: "GPS_LAT" casa com o
+    # detector de nome e é um eixo solto — tratá-la como par daria latitude = longitude.
+    if col_unica in base.columns and coordenadas.parece_par(base[col_unica]):
+        lida = coordenadas.normalizar(base[col_unica], base[col_unica],
+                                      uf=uf, zona_utm=zona_utm)
+    elif col_lat in base.columns or col_lon in base.columns:
+        lida = coordenadas.normalizar(
+            base[col_lat] if col_lat in base.columns else None,
+            base[col_lon] if col_lon in base.columns else None,
+            uf=uf, zona_utm=zona_utm,
+        )
+    else:
+        lida = None
+
+    base.attrs["formato_coordenadas"] = lida.formato if lida else "ausente"
+    base.attrs["zonas_utm_candidatas"] = lida.zonas_utm_candidatas if lida else []
+    base.attrs["zona_utm_adotada"] = lida.zona_utm_adotada if lida else None
+
+    if lida is not None:
+        base["_lat"], base["_lon"] = lida.latitude, lida.longitude
+        ressalvas.extend(lida.ressalvas)
         dentro_faixa = (
             base["_lat"].between(LAT_MIN, LAT_MAX) & base["_lon"].between(LON_MIN, LON_MAX)
         )

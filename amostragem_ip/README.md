@@ -64,10 +64,23 @@ Em 20 sementes, a dispersão venceu em 20.
   coletora, local). `vias.normalizar_classe` converte os três e **preserva** o que não
   reconhece como estrato próprio — para amostragem o que importa é cobrir todo rótulo
   presente, não julgar a nomenclatura.
-- **Coordenada implausível.** Cadastro municipal traz lat/long trocados, zerados ou em
-  UTM. Fora da faixa do território brasileiro a coordenada é tratada como ausente, com
-  ressalva — o ponto continua elegível ao sorteio, apenas não puxa o k-means para o
-  oceano.
+- **Coordenada em qualquer formato** (`cadastro_ip/coordenadas.py`, desde 03/09/2026).
+  `pd.to_numeric` lê exatamente um formato — ponto decimal — e descarta todos os outros
+  em silêncio, o que fazia um cadastro em locale pt-BR chegar ao sorteio com dispersão
+  espacial desligada e sem mapa, sem dizer por quê. O módulo reconhece, e **cada
+  recuperação vira ressalva**: vírgula decimal, ponto de milhar do Excel
+  (`-19.546.047`), grau-minuto-segundo com qualquer combinação de símbolos e cardeal
+  (N/S/E/W/L/O), par em célula única (`-19,54, -44,08`, o que sai do Google Maps),
+  inteiro sem separador (micrograus), eixos trocados entre si, e **UTM/SIRGAS 2000**
+  (inversa de Snyder em numpy puro — o portal não tem GDAL nem pyproj).
+- **A zona UTM não sai do dado.** `(E, N)` reprojetado na zona vizinha cai 6° a oeste e
+  continua dentro do Brasil: zonas 18 a 24 são todas "plausíveis" para um município de
+  Minas. A UF estreita o envelope (em MG sobram 22 e 23), e o que sobrar de ambiguidade
+  vira seletor na UI + ressalva. Nunca se escolhe em silêncio.
+- **Coordenada implausível.** Fora da faixa do território brasileiro a coordenada é
+  tratada como ausente, com ressalva — o ponto continua elegível ao sorteio, apenas não
+  puxa o k-means para o oceano. Coordenada irrecuperável **não é inventada**: mandaria
+  equipe de campo a um endereço fabricado pelo próprio módulo.
 - **Setas da Tabela 2 da NBR 5426.** Célula sem plano manda usar o primeiro plano acima
   ou abaixo, **e isso muda o tamanho da amostra** porque muda a letra-código. Lote
   pequeno com NQA rigoroso frequentemente cai nesse caso e acaba em inspeção 100%.

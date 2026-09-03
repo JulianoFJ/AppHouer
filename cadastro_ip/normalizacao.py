@@ -29,10 +29,26 @@ SINONIMOS_COLUNAS: dict[str, list[str]] = {
     "quantidade":   ["qtd original", "qtd lampadas", "quantidade", "quantidadelampadas", "qtd", "qtde",
                      "quantidade de lampadas", "quantidade de lampadas houer",
                      "quantidade considerada", "quantidade existente"],
+    # Eixos separados. Inclui os nomes de GIS (coord_y / northing / utm n) porque
+    # cadastro exportado de QGIS/ArcGIS vem projetado — a conversão para graus é
+    # tratada em `coordenadas.py`, mas a coluna precisa ser encontrada antes.
+    # Eixos separados. Inclui os nomes de GIS (coord_y / northing / utm_n) porque
+    # cadastro exportado de QGIS/ArcGIS vem projetado — converter para graus é papel de
+    # `coordenadas.py`, mas a coluna precisa ser encontrada antes. Nomes de uma letra
+    # ("X", "Y") ficam de fora de propósito: o casamento por prefixo do scoring não
+    # filtra sinônimo curto, e "X" pegaria qualquer coluna começada por x.
     "latitude":     ["latitude", "latitude coletada", "latitude original", "latitude cad", "lat",
-                     "latitude3"],
+                     "latitude3", "latitude y", "coord y", "coordenada y", "utm n",
+                     "northing", "norte utm"],
     "longitude":    ["longitude", "longitude coletada", "longitude original", "longitude cad",
-                     "long", "lon", "lng", "longitude3"],
+                     "long", "lon", "lng", "longitude3", "longitude x", "coord x",
+                     "coordenada x", "utm e", "easting", "leste utm"],
+    # Par em uma célula só — o formato que sai de "copiar coordenada" no Google Maps.
+    # Sem "gps" solto na lista: "GPS_LAT" é eixo, não par, e o prefixo confundiria os
+    # dois conceitos. Quem decide no fim é `coordenadas.parece_par`, sobre os dados.
+    "coordenadas":  ["coordenadas", "coordenada", "coordenada geografica", "lat long",
+                     "latlong", "lat lon", "latlon", "geolocalizacao",
+                     "georreferenciamento", "coordenada gps"],
     "logradouro":   ["endereco", "logradouro", "rua", "endereço"],
     "bairro":       ["bairro"],
     "local":        ["local", "localizacao", "tipo de local", "localizacão"],

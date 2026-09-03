@@ -5,6 +5,7 @@ amostras (medição estrutural e medição de qualidade) dimensionadas pela NBR 
 Esta página é apenas a UI; a lógica vive em `amostragem_ip/`.
 """
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -15,6 +16,7 @@ from amostragem_ip.amostrador import GRUPO_ESTRUTURAL, GRUPO_QUALIDADE
 from amostragem_ip.leitura import ler_planilha
 from amostragem_ip.saidas import planilha_amostra
 from amostragem_ip.vias import identificar_vias_principais, vias_para_dataframe
+from cadastro_ip import municipio as municipio_ibge
 from cadastro_ip.normalizacao import detectar_colunas
 
 
@@ -26,6 +28,7 @@ SS = {
     "xlsx_estrutural": "am_xlsx_estrutural",
     "xlsx_qualidade": "am_xlsx_qualidade",
     "relatorio": "am_relatorio",
+    "mensagem": "am_mensagem",
 }
 for chave in SS.values():
     st.session_state.setdefault(chave, None)
@@ -96,6 +99,90 @@ def _para_exibicao(df: pd.DataFrame) -> pd.DataFrame:
     return exibicao
 
 
+# ── Etapas caras, memoizadas ──────────────────────────────────────────────────
+# O Streamlit reexecuta a página inteira a cada clique em qualquer widget. Sem cache,
+# mexer no slider do NQA refazia a preparação da base e a identificação de vias: 0,6 s
+# num cadastro de 5 mil pontos e 6,5 s num de 100 mil — a cada clique, para um
+# resultado idêntico. O cache é o que faz a página responder como formulário em vez de
+# como lote. `max_entries` baixo porque cada entrada guarda uma cópia do cadastro.
+@st.cache_data(show_spinner="Preparando a base…", max_entries=3)
+def _preparar_base(cadastro: pd.DataFrame, colunas: dict, uf: str, zona_utm):
+    return amostrador.preparar_base(cadastro, colunas, uf=uf or None, zona_utm=zona_utm)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _vias_principais(chaves: pd.DataFrame, teto: int):
+    """Recebe só as 4 colunas que o ranking usa — hashear a base inteira custaria mais
+    que recalcular em cadastro grande."""
+    return identificar_vias_principais(chaves, col_chave="_chave_via", teto=teto)
+
+
+# ── Identificação do município ────────────────────────────────────────────────
+# Município e UF alimentam o cabeçalho do relatório, o das duas planilhas, o nome do
+# arquivo baixado e a trilha de uso — e a UF ainda **entra no cálculo**, estreitando as
+# zonas UTM candidatas de um cadastro projetado. Por isso a escolha sai de lista
+# fechada com a UF derivada, em vez de dois campos de texto livre que aceitam "mg",
+# "Minas" ou um erro de digitação. A regra vive em `cadastro_ip.municipio`; aqui só a UI.
+@st.cache_data(show_spinner=False)
+def _lista_municipios() -> pd.DataFrame:
+    return municipio_ibge.listar_municipios()
+
+
+def _identificacao(cadastro: pd.DataFrame | None) -> tuple[str, str]:
+    """Devolve (município, UF). Lista fechada quando há base do IBGE; texto livre senão."""
+    lista = _lista_municipios()
+
+    if lista.empty:   # deploy sem o parquet de entes — degrada, não trava
+        nome = st.text_input("Município", key="am_municipio", placeholder="Ex.: Matozinhos")
+        sigla = st.text_input("UF", key="am_uf", max_chars=2, placeholder="MG").strip().upper()
+        if sigla and sigla not in municipio_ibge.UFS:
+            st.error(f"“{sigla}” não é sigla de UF. A zona UTM de um cadastro projetado "
+                     "depende dela.")
+            sigla = ""
+        return nome.strip(), sigla
+
+    rotulos = lista["rotulo"].tolist()
+    sugerido = municipio_ibge.sugerir(cadastro, lista)
+
+    # O `index` só vale na primeira vez que o widget existe: depois disso o Streamlit
+    # restaura o valor guardado na sessão e ignora o índice — e como o campo é desenhado
+    # uma vez antes do upload (sem cadastro, logo sem sugestão), o `None` guardado ali
+    # anularia a detecção. Escrever na chave do widget resolve, e a comparação com a
+    # última sugestão aplicada é o que impede sobrescrever uma escolha manual do
+    # operador: só reaplica quando o cadastro muda e a sugestão passa a ser outra.
+    if sugerido and st.session_state.get("am_municipio_sugerido") != sugerido:
+        st.session_state["am_municipio_sugerido"] = sugerido
+        st.session_state["am_municipio_ibge"] = sugerido
+
+    escolha = st.selectbox(
+        "Município",
+        rotulos,
+        index=rotulos.index(sugerido) if sugerido in rotulos else None,
+        placeholder="Digite para buscar — ex.: Matozinhos",
+        accept_new_options=True,   # município fora da lista ainda pode ser digitado
+        key="am_municipio_ibge",
+        help="Os 5.570 municípios do IBGE. A UF sai da escolha — não precisa digitar e "
+             "não dá para errar a sigla. Vai para o cabeçalho do relatório e das "
+             "planilhas, para o nome do arquivo baixado e, quando o cadastro vem em "
+             "UTM, para a definição da zona.",
+    )
+    if not escolha:
+        return "", ""
+
+    linha = lista[lista["rotulo"] == escolha]
+    if not linha.empty:
+        origem = " · detectado no cadastro" if sugerido == escolha else ""
+        st.caption(f"UF **{linha.iloc[0]['uf']}**{origem}")
+        return str(linha.iloc[0]["ente"]), str(linha.iloc[0]["uf"])
+
+    nome, sigla = municipio_ibge.separar_rotulo(str(escolha))
+    if sigla:
+        st.caption(f"UF **{sigla}** · fora da lista do IBGE")
+    else:
+        st.caption("Sem UF — escreva `Município/UF` se o cadastro estiver em UTM.")
+    return nome, sigla
+
+
 # ── Passo 1: cadastro do município ────────────────────────────────────────────
 _passo(
     "Passo 1 — Cadastro do município",
@@ -108,10 +195,11 @@ with col_upload:
     arquivo = st.file_uploader(
         "📋 Base de cadastro de IP", type=["xlsx", "xls", "csv"], key="am_upload"
     )
-with col_ident:
-    municipio = st.text_input("Município", key="am_municipio", placeholder="Ex.: Matozinhos")
-    uf = st.text_input("UF", key="am_uf", max_chars=2, placeholder="MG")
 
+# A leitura vem ANTES de desenhar o campo de município, embora o campo apareça ao lado
+# do upload: `st.columns` guarda o lugar, então a ordem visual não precisa ser a ordem
+# do código. É o que permite pré-selecionar o município já na passada do upload, em vez
+# de só na interação seguinte.
 if arquivo is not None and st.session_state[SS["nome_arquivo"]] != arquivo.name:
     try:
         st.session_state[SS["cadastro"]] = ler_planilha(arquivo)
@@ -121,6 +209,10 @@ if arquivo is not None and st.session_state[SS["nome_arquivo"]] != arquivo.name:
         st.error(f"Erro ao ler **{arquivo.name}**: {exc}")
 
 cadastro = st.session_state[SS["cadastro"]]
+
+with col_ident:
+    municipio, uf = _identificacao(cadastro)
+
 if cadastro is None:
     st.info("Envie o cadastro para continuar.")
     st.stop()
@@ -147,27 +239,41 @@ CONCEITOS = [
     ("bairro", "Bairro", False),
     ("latitude", "Latitude", False),
     ("longitude", "Longitude", False),
+    ("coordenadas", "Coordenada única (lat, lon)", False),
 ]
 
 deteccao = detectar_colunas(
     cadastro,
     obrigatorios=["id_ponto"],
-    recomendados=["classe_via", "logradouro", "bairro", "latitude", "longitude"],
+    recomendados=["classe_via", "logradouro", "bairro", "latitude", "longitude",
+                  "coordenadas"],
 )
 opcoes = ["— não usar —"] + list(cadastro.columns)
 colunas: dict[str, str] = {}
+
+AJUDA_CONCEITO = {
+    "coordenadas": "Para cadastro que traz o par numa célula só (`-19,54, -44,08`). "
+                   "Quando preenchida, prevalece sobre Latitude/Longitude.",
+    "latitude": "Aceita ponto ou vírgula decimal, grau-minuto-segundo (19°32'45\"S) e "
+                "coordenada UTM — a conversão é automática.",
+    "longitude": "Aceita ponto ou vírgula decimal, grau-minuto-segundo (44°05'03\"W) e "
+                 "coordenada UTM — a conversão é automática.",
+}
 
 grade = st.columns(3)
 for indice, (conceito, rotulo, destaque) in enumerate(CONCEITOS):
     detectada = deteccao.mapeados.get(conceito)
     padrao = opcoes.index(detectada) if detectada in opcoes else 0
+    ajuda = AJUDA_CONCEITO.get(conceito, "")
+    if not ajuda:
+        ajuda = "Detectada automaticamente." if detectada else "Não detectada — selecione."
     with grade[indice % 3]:
         escolha = st.selectbox(
             f"{'**' if destaque else ''}{rotulo}{'**' if destaque else ''}",
             opcoes,
             index=padrao,
             key=f"am_col_{conceito}",
-            help="Detectada automaticamente." if detectada else "Não detectada — selecione.",
+            help=ajuda,
         )
     if escolha != "— não usar —":
         colunas[conceito] = escolha
@@ -182,7 +288,31 @@ if "logradouro" not in colunas:
         "Sem logradouro não há como garantir ponto em cada avenida ou rodovia principal."
     )
 
-base, ressalvas_preparacao = amostrador.preparar_base(cadastro, colunas)
+# Duas passadas quando o cadastro está em UTM: a primeira descobre que está, a segunda
+# usa a zona que o operador confirmou. Não dá para pular a primeira — a zona só é
+# oferecida depois de o formato ser reconhecido, e (E, N) sozinho não a determina.
+zona_utm = st.session_state.get("am_zona_utm_valor")
+base, ressalvas_preparacao = _preparar_base(cadastro, colunas, (uf or "").upper(), zona_utm)
+
+# Zona UTM: só aparece quando o cadastro veio projetado E o dado não decide sozinho.
+# O padrão do seletor é a zona que o módulo adotou, para o primeiro render não disparar
+# um rerun só por divergir de si mesmo.
+candidatas = base.attrs.get("zonas_utm_candidatas") or []
+if len(candidatas) > 1:
+    adotada = base.attrs.get("zona_utm_adotada") or candidatas[0]
+    # Sem `key`: a lista de zonas candidatas encolhe quando o operador preenche a UF, e
+    # um valor guardado na sessão que sumiu das opções quebra o selectbox. Quem guarda a
+    # escolha é `am_zona_utm_valor`, e o índice reflete a zona efetivamente adotada.
+    escolha_zona = st.selectbox(
+        "Zona UTM do cadastro", candidatas, index=candidatas.index(adotada),
+        help="O cadastro veio projetado em UTM, e o par (E, N) é compatível com mais de "
+             "uma zona. Preencha a UF acima para reduzir as opções, escolha aqui e "
+             "confira no mapa: zona errada desloca o município no sentido leste-oeste.",
+    )
+    if escolha_zona != adotada:
+        st.session_state["am_zona_utm_valor"] = escolha_zona
+        st.rerun()
+
 tem_coordenadas = bool(base["_tem_coord"].any())
 
 
@@ -292,8 +422,9 @@ teto = st.slider(
          "pequena, teto alto engole a alocação proporcional.",
 )
 
-candidatas = identificar_vias_principais(base, col_chave="_chave_via", teto=teto)
-tabela_vias = vias_para_dataframe(candidatas)
+vias_candidatas = _vias_principais(
+    base[["_chave_via", "_logradouro", "_tipo_via", "_classe"]], int(teto))
+tabela_vias = vias_para_dataframe(vias_candidatas)
 vias_obrigatorias: list[str] | None = None
 
 if tabela_vias.empty:
@@ -332,25 +463,70 @@ CORES = {
     "Medição estrutural": "#00A9E0",
     "Medição de qualidade": "#F59E0B",
 }
+# Teto de marcadores por mapa. O mapa de conferência da amostra precisa de todos os
+# pontos sorteados e de um fundo denso; a prévia do parque, que é redesenhada a cada
+# clique em qualquer widget da página, vale menos que o tempo de resposta — daí o
+# teto menor nela (cada marcador vira JSON trafegado do servidor ao navegador).
 LIMITE_PONTOS_MAPA = 12000
+LIMITE_PONTOS_PREVIA = 4000
 
 
-def _mapa(df: pd.DataFrame, coluna_cor: str, titulo: str, cores=None) -> None:
+def _enquadrar(lat: pd.Series, lon: pd.Series) -> tuple[dict, float, float]:
+    """
+    Centro e zoom que enquadram a nuvem de pontos. Devolve (centro, zoom, span em graus).
+
+    Existe porque o `zoom=11` fixo que estava aqui só servia para um município do
+    tamanho de Matozinhos: em capital ele corta metade do parque, e em cadastro de
+    consórcio intermunicipal mostra um quarteirão. E o centro não é a média — a média
+    é puxada por um punhado de pontos com coordenada errada, e o mapa acaba num lugar
+    onde não há ponto nenhum. O recorte de 2% a 98% descarta esses extremos antes de
+    medir; o mapa continua desenhando todos os pontos, inclusive os de fora.
+    """
+    p_lat = lat.quantile([0.02, 0.98]).to_numpy()
+    p_lon = lon.quantile([0.02, 0.98]).to_numpy()
+    centro = {"lat": float((p_lat[0] + p_lat[1]) / 2), "lon": float((p_lon[0] + p_lon[1]) / 2)}
+
+    # Mínimo de 0,004° (~450 m) evita zoom absurdo quando todos os pontos coincidem.
+    span_lat = max(float(p_lat[1] - p_lat[0]), 0.004)
+    span_lon = max(float(p_lon[1] - p_lon[0]), 0.004)
+
+    # Web Mercator: no zoom z cada tile de 512 px cobre 360/2^z graus de longitude. O
+    # enquadramento é o menor zoom que faz os dois eixos caberem na viewport, com uma
+    # margem de 20% para o ponto da borda não encostar na moldura.
+    largura, altura = 1100.0, 520.0
+    z_lon = np.log2(largura * 360.0 / (512.0 * span_lon))
+    z_lat = np.log2(altura * 360.0 / (512.0 * span_lat / np.cos(np.radians(centro["lat"]))))
+    zoom = float(np.clip(min(z_lon, z_lat) - 0.35, 3.0, 16.0))
+    return centro, zoom, max(span_lat, span_lon)
+
+
+def _mapa(df: pd.DataFrame, coluna_cor: str, titulo: str, cores=None,
+          limite: int = LIMITE_PONTOS_MAPA) -> None:
     """Desenha o mapa dos pontos. Amostra o fundo quando o parque é grande demais."""
     plotavel = df[df["_tem_coord"]]
     if plotavel.empty:
-        st.info("Sem coordenadas válidas — mapa indisponível.")
+        formato = df.attrs.get("formato_coordenadas", "ausente")
+        st.warning(
+            "**Mapa indisponível: nenhuma coordenada válida.** "
+            + ("Nenhuma coluna de coordenada foi indicada no Passo 2."
+               if formato == "ausente" else
+               f"As coordenadas foram lidas como *{formato}*, mas nenhuma caiu dentro "
+               "do território brasileiro. Confira no Passo 2 se as colunas escolhidas "
+               "são mesmo latitude e longitude.")
+        )
         return
-    if len(plotavel) > LIMITE_PONTOS_MAPA:
+    if len(plotavel) > limite:
         sorteados = plotavel[plotavel["_grupo"] != ""] if "_grupo" in plotavel else plotavel.iloc[0:0]
         fundo = plotavel.drop(index=sorteados.index).sample(
-            n=max(LIMITE_PONTOS_MAPA - len(sorteados), 0), random_state=0
+            n=max(limite - len(sorteados), 0), random_state=0
         )
         plotavel = pd.concat([fundo, sorteados])
         st.caption(
             f"Mapa com {len(plotavel):,} pontos — o parque foi subamostrado para não "
             "travar o navegador; todos os pontos sorteados estão presentes.".replace(",", ".")
         )
+
+    centro, zoom, span = _enquadrar(plotavel["_lat"], plotavel["_lon"])
     figura = px.scatter_map(
         plotavel,
         lat="_lat",
@@ -361,26 +537,50 @@ def _mapa(df: pd.DataFrame, coluna_cor: str, titulo: str, cores=None) -> None:
         hover_name="_id",
         hover_data={"_logradouro": True, "_bairro": True, "_classe": True,
                     "_lat": False, "_lon": False},
-        zoom=11,
+        center=centro,
+        zoom=zoom,
         height=560,
         map_style="open-street-map",
-        title=titulo,
     )
     figura.update_traces(marker={"size": 7})
+    # O título fica fora da figura (é `st.markdown`, acima): dentro dela ele dividia a
+    # faixa superior com a legenda horizontal e os dois se sobrepunham. A legenda passa
+    # a flutuar sobre o mapa, num cartão translúcido — não rouba altura do mapa nem
+    # some no fundo claro do OpenStreetMap.
     figura.update_layout(
-        margin={"l": 0, "r": 0, "t": 40, "b": 0},
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.0, "x": 0},
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        legend={"orientation": "h", "yanchor": "top", "y": 0.99, "xanchor": "left",
+                "x": 0.01, "title_text": "", "bgcolor": "rgba(11,17,30,.82)",
+                "bordercolor": "#2f3f5c", "borderwidth": 1},
         paper_bgcolor="rgba(0,0,0,0)",
         font={"color": "#e2e8f0"},
     )
+    st.markdown(f"**{titulo}**")
     st.plotly_chart(figura, use_container_width=True)
+
+    # Um município cabe em ~0,5°. Espalhamento maior é sinal de coordenada trocada ou
+    # de mistura de bases — e é justamente o caso em que o mapa "abre no nada" e
+    # parece quebrado. Dizer o motivo é mais útil que deixar o operador adivinhar.
+    if span > 1.0:
+        st.warning(
+            f"Os pontos se espalham por {span:.1f}° (~{span * 111:.0f} km) — muito mais "
+            "que um município. Há coordenada errada na base, ou a coluna escolhida no "
+            "Passo 2 não é a de coordenada. O mapa abriu afastado para mostrar tudo."
+        )
 
 
 resultado = st.session_state[SS["resultado"]]
 
-if tem_coordenadas and resultado is None:
-    with st.expander("🗺️ Mapa do parque cadastrado (antes do sorteio)", expanded=False):
-        _mapa(base, "_classe", "Parque de IP por classe de iluminação")
+if resultado is None:
+    # Fora de expander: o mapa é a única conferência visual de que as coordenadas foram
+    # lidas certo, e escondido atrás de um clique ele só era visto depois do sorteio —
+    # tarde demais. Quando não há coordenada válida, `_mapa` explica o motivo em vez de
+    # sumir, que era o que fazia a página parecer quebrada.
+    formato = base.attrs.get("formato_coordenadas", "ausente")
+    if tem_coordenadas and formato != "graus decimais":
+        st.caption(f"🧭 Coordenadas reconhecidas como **{formato}**.")
+    _mapa(base, "_classe", "Parque de IP por classe de iluminação",
+          limite=LIMITE_PONTOS_PREVIA)
 
 
 # ── Passo 5: sorteio ──────────────────────────────────────────────────────────
@@ -416,10 +616,15 @@ if st.button("🎲 Sortear amostra", type="primary", use_container_width=True):
                 alvo=f"{municipio}/{uf}".strip("/"),
                 detalhe=f"{resultado.total_amostra} de {resultado.total_parque} pontos",
             )
-            st.success(
+            # Rerun em vez de seguir o script: a prévia do parque já foi desenhada
+            # acima nesta passada (quando `resultado` ainda era None), e sem o rerun a
+            # tela ficaria com dois mapas pesados até o próximo clique. A mensagem
+            # atravessa o rerun pela sessão.
+            st.session_state[SS["mensagem"]] = (
                 f"✅ Amostra sorteada: {len(resultado.estrutural)} pontos estruturais + "
                 f"{len(resultado.qualidade)} de qualidade."
             )
+            st.rerun()
         except Exception as exc:
             import traceback
             st.error(f"❌ Erro no sorteio: {exc}")
@@ -427,6 +632,9 @@ if st.button("🎲 Sortear amostra", type="primary", use_container_width=True):
                 st.code(traceback.format_exc())
 
 resultado = st.session_state[SS["resultado"]]
+mensagem = st.session_state.pop(SS["mensagem"], None)
+if mensagem:
+    st.success(mensagem)
 
 
 # ── Passo 6: resultado ────────────────────────────────────────────────────────
