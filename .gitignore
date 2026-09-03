@@ -10,7 +10,11 @@ env/
 # Secrets / env
 .env
 .env.*
-.streamlit/secrets.toml
+# O `*` no fim é deliberado: cobre também os backups (`secrets.toml.bak-...`) que
+# sobram de uma troca de senha. Sem ele, o padrão casa só com o nome exato e um
+# arquivo com hash de credencial entra no commit sem ninguém notar.
+.streamlit/secrets.toml*
+!.streamlit/secrets.toml.example
 
 # OS/editor
 .DS_Store
