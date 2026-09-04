@@ -153,7 +153,17 @@ def _colunas_existentes(gdb: Path, camada: str, desejadas: Sequence[str],
     return presentes
 
 
-def _extrair_csv(gdb: Path, sql: str, destino: Path, com_xy: bool) -> pd.DataFrame:
+def _extrair_csv(gdb: Path, sql: str, destino: Path, com_xy: bool,
+                 colunas: Optional[Sequence[str]] = None) -> pd.DataFrame:
+    """
+    Roda o ogr2ogr para CSV e lê o resultado.
+
+    `colunas` restringe o que entra na memória. Importa numa base grande: o PONNOT da
+    Cemig-D tem ~9,9 milhões de registros, e lê-lo inteiro como texto (`dtype=str`)
+    ocuparia vários GB de RAM para depois descartar quase tudo — só `COD_ID`, `MUN` e o
+    par X/Y são usados. As coordenadas viram float32 na leitura, que é a precisão com
+    que elas são gravadas de qualquer forma.
+    """
     ogr2ogr = bdgd.localizar_ogr2ogr()
     comando = [ogr2ogr, "-f", "CSV", str(destino), str(gdb), "-sql", sql]
     if com_xy:
@@ -161,7 +171,11 @@ def _extrair_csv(gdb: Path, sql: str, destino: Path, com_xy: bool) -> pd.DataFra
     processo = subprocess.run(comando, capture_output=True, text=True, errors="replace")
     if processo.returncode != 0 or not destino.exists():
         raise RuntimeError(f"ogr2ogr falhou: {processo.stderr.strip()[:500]}")
-    return pd.read_csv(destino, dtype=str, low_memory=False)
+
+    cabecalho = pd.read_csv(destino, nrows=0).columns.tolist()
+    usar = [c for c in colunas if c in cabecalho] if colunas else cabecalho
+    tipos = {c: ("float32" if c in ("X", "Y") else "str") for c in usar}
+    return pd.read_csv(destino, usecols=usar, dtype=tipos, low_memory=False)
 
 
 def extrair(codigo_ibge: str, base: Optional[bdgd.BaseBDGD] = None,
@@ -342,21 +356,32 @@ def extrair_base_inteira(base: bdgd.BaseBDGD, publicar: bool = False,
 
         t1 = time.time()
         log("extraindo o PONNOT inteiro…")
+        # Só o que o join usa: numa base grande o PONNOT é a tabela que decide se o
+        # processo cabe na memória.
         ponnot = _extrair_csv(gdb, f"SELECT {', '.join(cols_pn)} FROM PONNOT",
-                              tmp / "ponnot.csv", com_xy=True)
+                              tmp / "ponnot.csv", com_xy=True,
+                              colunas=["COD_ID", "MUN", "X", "Y"])
         log(f"PONNOT: {len(ponnot):,} pontos ({time.time() - t1:,.0f} s)".replace(",", "."))
 
+    # Agrupar UMA vez, em vez de filtrar o PONNOT dentro do laço. Numa base como a
+    # Cemig-D são ~9,9 milhões de pontos notáveis e 766 municípios: filtrar por
+    # município custaria 766 varreduras da tabela inteira, o que sozinho levaria mais
+    # tempo que a extração.
+    ponnot["MUN"] = ponnot["MUN"].astype(str).str.strip()
+    pip["MUN"] = pip["MUN"].astype(str).str.strip()
+    grupos_ponnot = {str(k): g for k, g in ponnot.groupby("MUN", sort=False)}
+    vazio = ponnot.iloc[0:0]
+
     gravados: dict[str, int] = {}
-    for codigo, fatia in pip.groupby("MUN"):
+    for codigo, fatia in pip.groupby("MUN", sort=False):
         codigo = str(codigo).strip()
         if not codigo or codigo.lower() in ("nan", "none"):
             continue
-        # O PONNOT é filtrado pelo município junto com a PIP: manter a tabela inteira
-        # no merge de cada município multiplicaria o custo por 766.
-        pn_municipio = ponnot[ponnot["MUN"].astype(str).str.strip() == codigo]
-        cadastro = _montar(fatia, pn_municipio, base, codigo)
+        cadastro = _montar(fatia, grupos_ponnot.get(codigo, vazio), base, codigo)
         salvar(cadastro, codigo, publicar=publicar)
         gravados[codigo] = len(cadastro)
+        if len(gravados) % 100 == 0:
+            log(f"  … {len(gravados)} municípios gravados")
     log(f"{len(gravados):,} municípios gravados".replace(",", "."))
     return gravados
 
