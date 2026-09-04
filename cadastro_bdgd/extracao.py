@@ -324,8 +324,38 @@ def carregar(codigo_ibge: str) -> Optional[pd.DataFrame]:
     return pd.read_parquet(destino) if destino else None
 
 
+# Cache das extrações brutas por base, fora do repositório — o mesmo diretório onde o
+# ETL do Hub grava seus agregados intermediários. `raw_<slug>_pip.csv` e
+# `raw_<slug>_ponnot.csv` são o próprio CSV do ogr2ogr, sem tratamento.
+def _cache_bruto(base: bdgd.BaseBDGD, tabela: str) -> Path:
+    return config.BDGD_PROCESSADOS / f"raw_{base.slug}_{tabela}.csv"
+
+
+def _renomear_com_retentativa(origem: Path, destino: Path, tentativas: int = 6) -> None:
+    """
+    `Path.replace` num projeto sincronizado pelo OneDrive falha com `PermissionError`
+    quando o cliente de sincronização pega o arquivo recém-fechado para escanear —
+    aconteceu em 04/09/2026 logo após o ogr2ogr terminar de escrever o PONNOT. O lock
+    é sempre breve; a saída é tentar de novo com espera crescente, não desistir.
+    """
+    import time as _time
+    ultimo: Optional[Exception] = None
+    for tentativa in range(tentativas):
+        try:
+            origem.replace(destino)
+            return
+        except PermissionError as exc:                  # noqa: PERF203
+            ultimo = exc
+            _time.sleep(min(2 ** tentativa, 20))
+    raise RuntimeError(
+        f"Não foi possível renomear {origem.name} para {destino.name} após "
+        f"{tentativas} tentativas — provável lock do OneDrive. O CSV bruto está em "
+        f"{origem}; renomeie manualmente e rode de novo com o cache presente."
+    ) from ultimo
+
+
 def extrair_base_inteira(base: bdgd.BaseBDGD, publicar: bool = False,
-                         verboso: bool = True) -> dict[str, int]:
+                         verboso: bool = True, usar_cache: bool = True) -> dict[str, int]:
     """
     Extrai a distribuidora inteira numa passada e grava um parquet por município.
 
@@ -335,6 +365,18 @@ def extrair_base_inteira(base: bdgd.BaseBDGD, publicar: bool = False,
     sob demanda. Medido em 04/09/2026: um único município da Cemig-D passou de uma hora.
     Numa passada só, o download é pago uma vez e os 766 municípios saem juntos.
 
+    Retomável, mas só até certo ponto. A PIP é rápida (35 min na Cemig-D) e fica em
+    cache assim que termina — uma segunda tentativa não a refaz. **O PONNOT não é
+    retomável de verdade**: o `ogr2ogr` não guarda checkpoint, e um filtro por `WHERE`
+    não ajuda porque o driver do OpenFileGDB tem que varrer o arquivo binário inteiro
+    de qualquer forma — o gargalo é banda do Drive, não CPU nem seletividade da
+    consulta. Por isso o PONNOT só é gravado no cache **depois de completo**: se o
+    processo for morto no meio (como aconteceu em 04/09/2026, interrompido sem erro
+    visível depois de ~90 min só no PONNOT), a próxima chamada reaproveita a PIP e
+    recomeça o PONNOT do zero — em vez de publicar um cadastro com cobertura desigual
+    por município, como mediu o teste daquele dia: 91,5% de casamento geral, mas
+    só 26 de 775 municípios com ≥95% e 747 parciais.
+
     Devolve {código IBGE: pontos gravados}.
     """
     def log(msg: str) -> None:
@@ -342,26 +384,47 @@ def extrair_base_inteira(base: bdgd.BaseBDGD, publicar: bool = False,
             print(f"  {msg}", flush=True)
 
     gdb = base.caminho
-    cols_pip = _colunas_existentes(gdb, "PIP", COLUNAS_PIP, COLUNAS_PIP_OBRIGATORIAS)
-    cols_pn = _colunas_existentes(gdb, "PONNOT", COLUNAS_PONNOT,
-                                  COLUNAS_PONNOT_OBRIGATORIAS)
+    config.garantir_pastas()
+    cache_pip = _cache_bruto(base, "pip")
+    cache_ponnot = _cache_bruto(base, "ponnot")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
+    if usar_cache and cache_pip.exists():
+        log(f"PIP em cache ({cache_pip.stat().st_size / 1e6:,.0f} MB) — pulando extração"
+            .replace(",", "."))
+        pip = pd.read_csv(cache_pip, dtype=str, low_memory=False)
+    else:
+        cols_pip = _colunas_existentes(gdb, "PIP", COLUNAS_PIP, COLUNAS_PIP_OBRIGATORIAS)
         t0 = time.time()
         log("extraindo a PIP inteira…")
-        pip = _extrair_csv(gdb, f"SELECT {', '.join(cols_pip)} FROM PIP",
-                           tmp / "pip.csv", com_xy=False)
-        log(f"PIP: {len(pip):,} pontos ({time.time() - t0:,.0f} s)".replace(",", "."))
+        pip = _extrair_csv(gdb, f"SELECT {', '.join(cols_pip)} FROM PIP", cache_pip,
+                           com_xy=False)
+        log(f"PIP: {len(pip):,} pontos ({time.time() - t0:,.0f} s) — em cache em "
+            f"{cache_pip.name}".replace(",", "."))
 
+    if usar_cache and cache_ponnot.exists():
+        log(f"PONNOT em cache ({cache_ponnot.stat().st_size / 1e6:,.0f} MB) — pulando "
+            "extração".replace(",", "."))
+        ponnot = pd.read_csv(cache_ponnot, dtype=str, low_memory=False,
+                             usecols=["COD_ID", "MUN", "X", "Y"])
+    else:
+        cols_pn = _colunas_existentes(gdb, "PONNOT", COLUNAS_PONNOT,
+                                      COLUNAS_PONNOT_OBRIGATORIAS)
         t1 = time.time()
-        log("extraindo o PONNOT inteiro…")
-        # Só o que o join usa: numa base grande o PONNOT é a tabela que decide se o
-        # processo cabe na memória.
-        ponnot = _extrair_csv(gdb, f"SELECT {', '.join(cols_pn)} FROM PONNOT",
-                              tmp / "ponnot.csv", com_xy=True,
-                              colunas=["COD_ID", "MUN", "X", "Y"])
-        log(f"PONNOT: {len(ponnot):,} pontos ({time.time() - t1:,.0f} s)".replace(",", "."))
+        log("extraindo o PONNOT inteiro… (não é retomável — se for interrompido, "
+            "recomeça do zero na próxima chamada)")
+        # Grava num nome temporário e só renomeia para o nome de cache ao terminar:
+        # um arquivo com o nome de "completo" tem que estar completo, senão a próxima
+        # chamada confiaria numa cobertura parcial sem saber.
+        # O nome PRECISA terminar em ".csv": o driver CSV do GDAL usa a extensão para
+        # decidir se cria um arquivo único ou um diretório multi-camada. Um sufixo como
+        # ".csv.incompleto" (sem ".csv" no final) fez o ogr2ogr criar um DIRETÓRIO com
+        # "PONNOT.csv" dentro em vez do arquivo esperado — descoberto em 04/09/2026.
+        bruto = cache_ponnot.with_name(cache_ponnot.stem + ".incompleto.csv")
+        ponnot = _extrair_csv(gdb, f"SELECT {', '.join(cols_pn)} FROM PONNOT", bruto,
+                              com_xy=True, colunas=["COD_ID", "MUN", "X", "Y"])
+        _renomear_com_retentativa(bruto, cache_ponnot)
+        log(f"PONNOT: {len(ponnot):,} pontos ({time.time() - t1:,.0f} s) — em cache em "
+            f"{cache_ponnot.name}".replace(",", "."))
 
     # Agrupar UMA vez, em vez de filtrar o PONNOT dentro do laço. Numa base como a
     # Cemig-D são ~9,9 milhões de pontos notáveis e 766 municípios: filtrar por
