@@ -16,6 +16,7 @@ from amostragem_ip.amostrador import GRUPO_ESTRUTURAL, GRUPO_QUALIDADE
 from amostragem_ip.leitura import ler_planilha
 from amostragem_ip.saidas import planilha_amostra
 from amostragem_ip.vias import identificar_vias_principais, vias_para_dataframe
+from cadastro_bdgd import montagem as cadastro_bdgd
 from cadastro_ip import municipio as municipio_ibge
 from cadastro_ip.normalizacao import detectar_colunas
 
@@ -29,6 +30,7 @@ SS = {
     "xlsx_qualidade": "am_xlsx_qualidade",
     "relatorio": "am_relatorio",
     "mensagem": "am_mensagem",
+    "bdgd": "am_bdgd_montado",
 }
 for chave in SS.values():
     st.session_state.setdefault(chave, None)
@@ -183,39 +185,151 @@ def _identificacao(cadastro: pd.DataFrame | None) -> tuple[str, str]:
     return nome, sigla
 
 
+# ── Origem alternativa: cadastro derivado da BDGD ─────────────────────────────
+# Município sem cadastro próprio não podia usar esta página. A BDGD da ANEEL tem o
+# parque ponto a ponto de praticamente todo o país, mas a entidade PIP é uma tabela sem
+# geometria e sem endereço: a coordenada vem do ponto notável da rede e o logradouro,
+# do OpenStreetMap. O pacote `cadastro_bdgd` faz esse trabalho; aqui é só a UI.
+def _origem_bdgd(col_esquerda, col_direita) -> tuple[pd.DataFrame | None, str, str]:
+    disponiveis = cadastro_bdgd.listar_disponiveis()
+
+    if disponiveis.empty:
+        with col_esquerda:
+            st.warning(
+                "Nenhum município extraído ainda. O cadastro ponto a ponto sai da BDGD "
+                "por um ETL que roda **fora do portal** — ele precisa do `.gdb` da "
+                "distribuidora (dezenas de GB) e do GDAL instalado."
+            )
+            st.code("py -m cadastro_bdgd.extracao 3162955", language="bash")
+            st.caption("Rode a partir de `app/`, com o código IBGE do município. "
+                       "Depois o município aparece nesta lista.")
+        return None, "", ""
+
+    with col_esquerda:
+        rotulos = disponiveis["rotulo"].tolist()
+        escolha = st.selectbox(
+            "🗺️ Município com cadastro extraído da BDGD",
+            rotulos,
+            index=0 if len(rotulos) == 1 else None,
+            placeholder="Escolha o município",
+            key="am_bdgd_municipio",
+            help="Só aparecem os municípios já extraídos nesta máquina.",
+        )
+        if not escolha:
+            st.info("Escolha o município para continuar.")
+            return None, "", ""
+
+        linha = disponiveis[disponiveis["rotulo"] == escolha].iloc[0]
+        codigo = str(linha["codigo_ibge"])
+
+        enriquecer = st.checkbox(
+            "Completar logradouro e classe viária pelo OpenStreetMap",
+            value=True,
+            key="am_bdgd_osm",
+            help="A BDGD não tem essas duas colunas. Sem elas o sorteio perde as cotas "
+                 "por via estruturante e por classe, e fica só com dispersão geográfica.",
+        )
+
+    with col_direita:
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+        st.caption(f"**{linha['ente']}/{linha['uf']}** · {linha['pontos']:,} pontos na BDGD"
+                   .replace(",", "."))
+
+    montado = st.session_state[SS["bdgd"]]
+    chave_atual = (codigo, enriquecer)
+
+    # Botão só quando há rede a pagar — a mesma regra do resto do portal. Com o parquet
+    # em disco e a malha do OSM em cache, montar o cadastro é trabalho local: pedir um
+    # clique aqui seria atrito sem contrapartida.
+    precisa_rede = enriquecer and not cadastro_bdgd.osm_em_cache(codigo)
+    if montado is None or st.session_state.get("am_bdgd_chave") != chave_atual:
+        if precisa_rede:
+            with col_esquerda:
+                if not st.button("Gerar cadastro (1 consulta ao OpenStreetMap)",
+                                 type="primary", key="am_bdgd_gerar"):
+                    st.info("A malha viária deste município ainda não está em cache.")
+                    return None, "", ""
+        with st.spinner("Montando o cadastro…"):
+            montado = cadastro_bdgd.montar(codigo, enriquecer=enriquecer)
+        if montado is None:
+            with col_esquerda:
+                st.error("O cadastro extraído sumiu do disco. Rode o ETL de novo.")
+            return None, "", ""
+        st.session_state[SS["bdgd"]] = montado
+        st.session_state["am_bdgd_chave"] = chave_atual
+        st.session_state[SS["cadastro"]] = montado.dados
+        st.session_state[SS["nome_arquivo"]] = f"BDGD {linha['ente']}/{linha['uf']}"
+        st.session_state[SS["resultado"]] = None
+
+    for ressalva in montado.ressalvas:
+        st.caption(f"⚠ {ressalva}")
+
+    st.download_button(
+        "⬇️ Baixar cadastro tratado (.xlsx)",
+        data=cadastro_bdgd.planilha(montado),
+        file_name=cadastro_bdgd.nome_arquivo(montado),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="am_bdgd_download",
+        help="Cadastro completo, com uma aba de procedência dizendo o que é medido, "
+             "o que é declarado pela distribuidora e o que é inferido.",
+    )
+    return montado.dados, str(linha["ente"]), str(linha["uf"])
+
+
 # ── Passo 1: cadastro do município ────────────────────────────────────────────
 _passo(
     "Passo 1 — Cadastro do município",
-    "Envie a base de cadastro de iluminação pública já com a coluna de classificação "
-    "viária tratada. Aceita .xlsx, .xls e .csv.",
+    "Envie a base de cadastro de IP, ou gere um cadastro a partir da BDGD da ANEEL "
+    "quando o município não tiver cadastro próprio.",
+)
+
+# A origem BDGD é uma **alternativa** ao upload, não uma alteração dele: os dois
+# caminhos terminam escrevendo em `SS["cadastro"]` e `SS["nome_arquivo"]`, e daí para
+# a frente os passos 2 a 6 não sabem de onde o cadastro veio. Manter o upload como
+# opção padrão é deliberado — o cadastro do município, quando existe, é melhor que o
+# derivado da BDGD, que não tem logradouro nem classe viária de origem.
+origem = st.radio(
+    "Origem do cadastro",
+    ["Enviar planilha", "Gerar da BDGD (ANEEL)"],
+    horizontal=True,
+    key="am_origem",
+    help="A BDGD cobre os pontos que a distribuidora fatura como iluminação pública. "
+         "Serve quando não há cadastro municipal — mas o logradouro e a classe viária "
+         "vêm inferidos do OpenStreetMap, não medidos.",
 )
 
 col_upload, col_ident = st.columns([2, 1])
-with col_upload:
-    arquivo = st.file_uploader(
-        "📋 Base de cadastro de IP", type=["xlsx", "xls", "csv"], key="am_upload"
-    )
 
-# A leitura vem ANTES de desenhar o campo de município, embora o campo apareça ao lado
-# do upload: `st.columns` guarda o lugar, então a ordem visual não precisa ser a ordem
-# do código. É o que permite pré-selecionar o município já na passada do upload, em vez
-# de só na interação seguinte.
-if arquivo is not None and st.session_state[SS["nome_arquivo"]] != arquivo.name:
-    try:
-        st.session_state[SS["cadastro"]] = ler_planilha(arquivo)
-        st.session_state[SS["nome_arquivo"]] = arquivo.name
-        st.session_state[SS["resultado"]] = None
-    except Exception as exc:
-        st.error(f"Erro ao ler **{arquivo.name}**: {exc}")
+if origem == "Enviar planilha":
+    with col_upload:
+        arquivo = st.file_uploader(
+            "📋 Base de cadastro de IP", type=["xlsx", "xls", "csv"], key="am_upload"
+        )
 
-cadastro = st.session_state[SS["cadastro"]]
+    # A leitura vem ANTES de desenhar o campo de município, embora o campo apareça ao
+    # lado do upload: `st.columns` guarda o lugar, então a ordem visual não precisa ser
+    # a ordem do código. É o que permite pré-selecionar o município já na passada do
+    # upload, em vez de só na interação seguinte.
+    if arquivo is not None and st.session_state[SS["nome_arquivo"]] != arquivo.name:
+        try:
+            st.session_state[SS["cadastro"]] = ler_planilha(arquivo)
+            st.session_state[SS["nome_arquivo"]] = arquivo.name
+            st.session_state[SS["resultado"]] = None
+            st.session_state[SS["bdgd"]] = None
+        except Exception as exc:
+            st.error(f"Erro ao ler **{arquivo.name}**: {exc}")
 
-with col_ident:
-    municipio, uf = _identificacao(cadastro)
+    cadastro = st.session_state[SS["cadastro"]]
+    with col_ident:
+        municipio, uf = _identificacao(cadastro)
 
-if cadastro is None:
-    st.info("Envie o cadastro para continuar.")
-    st.stop()
+    if cadastro is None:
+        st.info("Envie o cadastro para continuar.")
+        st.stop()
+else:
+    cadastro, municipio, uf = _origem_bdgd(col_upload, col_ident)
+    if cadastro is None:
+        st.stop()
 
 st.success(
     f"● {len(cadastro):,} pontos lidos de **{st.session_state[SS['nome_arquivo']]}** "
@@ -648,9 +762,14 @@ if resultado is not None:
     met1, met2, met3, met4 = st.columns(4)
     met1.metric("Medição estrutural", len(resultado.estrutural))
     met2.metric("Medição de qualidade", len(resultado.qualidade))
+    # Cadastro sem coluna de bairro — o derivado da BDGD é o caso — produzia "0/0", que
+    # parece defeito em vez de ausência de dado. Aqui a métrica diz o que houve.
+    bairros_parque = abrangencia.get("bairros_parque", 0)
     met3.metric(
         "Bairros cobertos",
-        f"{abrangencia.get('bairros_amostra', 0)}/{abrangencia.get('bairros_parque', 0)}",
+        f"{abrangencia.get('bairros_amostra', 0)}/{bairros_parque}" if bairros_parque
+        else "—",
+        help=None if bairros_parque else "O cadastro não tem coluna de bairro.",
     )
     if abrangencia.get("cobertura_grid") is not None:
         met4.metric(
