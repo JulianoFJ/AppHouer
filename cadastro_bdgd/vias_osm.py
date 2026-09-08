@@ -354,10 +354,11 @@ def enriquecer(df: pd.DataFrame, codigo_ibge: str, usar_cache: bool = True,
             f"{'continuou' if longe == 1 else 'continuaram'} sem logradouro e sem classe."
         )
     ressalvas.append(
-        "A classe segue o método da Tabela 1 da NBR 5101:2024, mas volume de tráfego e "
-        "qualidade da sinalização não existem em base pública: o volume foi inferido da "
-        "hierarquia viária e a sinalização entrou no valor neutro. É estimativa para "
-        "estratificar amostra, não enquadramento normativo."
+        "A classe segue a Tabela 1 (M) para rodovia/via expressa e a Tabela 3 (C) para "
+        "o resto da malha — avenida, coletora, rua local — conforme a NBR 5101:2024. "
+        "Volume de tráfego e qualidade da sinalização não existem em base pública: o "
+        "volume foi inferido da hierarquia viária e a sinalização entrou no valor "
+        "neutro. É estimativa para estratificar amostra, não enquadramento normativo."
     )
     if do_cache:
         ressalvas.append("Malha viária lida do cache local, sem consulta ao OpenStreetMap.")
