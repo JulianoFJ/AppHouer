@@ -29,20 +29,25 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
 
-def _url() -> str:
-    url = os.environ.get("DATABASE_URL")
-    if not url:
+def url() -> str:
+    """
+    `DATABASE_URL` normalizada. Exposta (não só de uso interno) porque
+    `migrations/env.py` também precisa dela — assim a URL só é lida e corrigida
+    num lugar só, tanto para a engine do app quanto para o Alembic.
+    """
+    valor = os.environ.get("DATABASE_URL")
+    if not valor:
         raise RuntimeError(
             "DATABASE_URL não definida. Em produção (Railway), referencie o serviço "
             "Postgres nas variáveis do app; em desenvolvimento local, aponte para um "
             "Postgres próprio antes de rodar `streamlit run app.py`."
         )
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
-    return url
+    if valor.startswith("postgres://"):
+        valor = "postgresql://" + valor[len("postgres://"):]
+    return valor
 
 
 @st.cache_resource
 def engine() -> Engine:
     """Engine única do processo, com pool de conexões compartilhado entre os módulos."""
-    return create_engine(_url(), pool_pre_ping=True)
+    return create_engine(url(), pool_pre_ping=True)
