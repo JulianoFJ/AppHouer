@@ -65,7 +65,7 @@ GRUPO_ESTRUTURAL = "estrutural"
 GRUPO_QUALIDADE = "qualidade"
 
 COLUNAS_AUXILIARES = [
-    "_id", "_logradouro", "_bairro", "_classe", "_lat", "_lon",
+    "_id", "_logradouro", "_bairro", "_classe", "_tecnologia", "_lat", "_lon",
     "_chave_logradouro", "_chave_via", "_tipo_via", "_tem_coord", "_grupo",
 ]
 
@@ -123,11 +123,12 @@ def preparar_base(df: pd.DataFrame, colunas: dict[str, str], uf: str | None = No
     Args:
         df: cadastro do município, como veio da planilha.
         colunas: conceito → nome real da coluna. Conceitos usados: `id_ponto`,
-            `logradouro`, `bairro`, `classe_via`, `latitude`, `longitude` e
-            `coordenadas` (coluna única com o par, que prevalece sobre o par de
-            colunas quando informada). Todos são opcionais exceto na prática
+            `logradouro`, `bairro`, `classe_via`, `tecnologia`, `latitude`,
+            `longitude` e `coordenadas` (coluna única com o par, que prevalece sobre
+            o par de colunas quando informada). Todos são opcionais exceto na prática
             `classe_via` (sem ela não há estratificação por classe) e `logradouro`
-            (sem ele não há via principal).
+            (sem ele não há via principal). `tecnologia` só alimenta o filtro opcional
+            de universo (Passo 4) — não entra no dimensionamento nem nas cotas.
         uf: sigla do estado. Usada só para desambiguar a zona de um cadastro em UTM.
         zona_utm: zona UTM confirmada pelo usuário, quando o dado sozinho não decide.
 
@@ -159,6 +160,12 @@ def preparar_base(df: pd.DataFrame, colunas: dict[str, str], uf: str | None = No
 
     col_log = colunas.get("logradouro")
     base["_logradouro"] = base[col_log].astype(str).str.strip() if col_log in base.columns else ""
+
+    # Não afeta cotas nem dimensionamento — serve só para um filtro opcional de
+    # universo (ex.: sortear só entre pontos já em LED) antes do sorteio propriamente
+    # dito. Sem coluna mapeada, fica vazia e o filtro correspondente não aparece.
+    col_tec = colunas.get("tecnologia")
+    base["_tecnologia"] = base[col_tec].astype(str).str.strip() if col_tec in base.columns else ""
 
     col_bairro = colunas.get("bairro")
     base["_bairro"] = base[col_bairro].astype(str).str.strip() if col_bairro in base.columns else ""

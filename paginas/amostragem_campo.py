@@ -18,8 +18,14 @@ from amostragem_ip import amostrador, nbr5426, relatorio
 from amostragem_ip.amostrador import GRUPO_ESTRUTURAL, GRUPO_QUALIDADE
 from amostragem_ip.leitura import ler_planilha
 from amostragem_ip.saidas import planilha_amostra
-from amostragem_ip.vias import identificar_vias_principais, vias_para_dataframe
+from amostragem_ip.vias import (
+    ROTULO_SEM_CLASSE,
+    identificar_vias_principais,
+    normalizar_classe,
+    vias_para_dataframe,
+)
 from cadastro_bdgd import montagem as cadastro_bdgd
+from cadastro_bdgd import vias_osm
 from cadastro_ip import areas_especiais, municipio as municipio_ibge
 from cadastro_ip.normalizacao import detectar_colunas
 
@@ -264,6 +270,19 @@ def _contorno_municipio(lat: pd.Series, lon: pd.Series, nome_municipio: str):
     return areas_especiais.buscar_contorno_municipio(lat, lon, nome_municipio)
 
 
+@st.cache_data(show_spinner="Consultando o OpenStreetMap…", max_entries=5)
+def _completar_classe_osm(lat: pd.Series, lon: pd.Series, chave_cache: str):
+    """
+    Mesma inferência que `cadastro_bdgd.montagem.montar` já aplica para a origem BDGD
+    — `vias_osm.enriquecer` só precisa de latitude/longitude, não é exclusiva dela.
+    Existe porque um cadastro por upload sem coluna de classificação viária ficava
+    com "(sem classe)" em 100% dos pontos e nenhuma tentativa de inferir (achado em
+    08/09/2026).
+    """
+    df = pd.DataFrame({"_lat": lat, "_lon": lon})
+    return vias_osm.enriquecer(df, chave_cache, col_lat="_lat", col_lon="_lon")
+
+
 # ── Identificação do município ────────────────────────────────────────────────
 # Município e UF alimentam o cabeçalho do relatório, o das duas planilhas, o nome do
 # arquivo baixado e a trilha de uso — e a UF ainda **entra no cálculo**, estreitando as
@@ -496,6 +515,7 @@ CONCEITOS = [
     ("classe_via", "Classificação viária", True),
     ("logradouro", "Logradouro", True),
     ("bairro", "Bairro", False),
+    ("tecnologia", "Tecnologia", False),
     ("latitude", "Latitude", False),
     ("longitude", "Longitude", False),
     ("coordenadas", "Coordenada única (lat, lon)", False),
@@ -504,13 +524,16 @@ CONCEITOS = [
 deteccao = detectar_colunas(
     cadastro,
     obrigatorios=["id_ponto"],
-    recomendados=["classe_via", "logradouro", "bairro", "latitude", "longitude",
-                  "coordenadas"],
+    recomendados=["classe_via", "logradouro", "bairro", "tecnologia", "latitude",
+                  "longitude", "coordenadas"],
 )
 opcoes = ["— não usar —"] + list(cadastro.columns)
 colunas: dict[str, str] = {}
 
 AJUDA_CONCEITO = {
+    "tecnologia": "Não entra no dimensionamento nem nas cotas — alimenta só o filtro "
+                  "opcional de universo mais abaixo (ex.: sortear só entre pontos já "
+                  "em LED).",
     "coordenadas": "Para cadastro que traz o par numa célula só (`-19,54, -44,08`). "
                    "Quando preenchida, prevalece sobre Latitude/Longitude.",
     "latitude": "Aceita ponto ou vírgula decimal, grau-minuto-segundo (19°32'45\"S) e "
@@ -574,6 +597,12 @@ if len(candidatas) > 1:
 
 tem_coordenadas = bool(base["_tem_coord"].any())
 
+# Identidade da base atual — usada para invalidar tanto o cache da classificação
+# viária via OSM quanto o das áreas especiais quando o cadastro muda de baixo do
+# operador (novo upload, novo município).
+_fingerprint_base = (len(base), round(float(base["_lat"].sum(skipna=True)), 3),
+                     round(float(base["_lon"].sum(skipna=True)), 3))
+
 # Contorno do município para os três mapas da página (prévia, áreas especiais, amostra
 # sorteada). Uma chamada por município — `st.cache_data` faz a segunda em diante ser
 # grátis — não atrás de botão porque é 1 requisição, não centenas, e o mapa que ela
@@ -583,6 +612,47 @@ contorno_municipio = (
     _contorno_municipio(base["_lat"], base["_lon"], municipio or "")
     if tem_coordenadas else []
 )
+
+# ── Classificação viária ausente: oferece completar pelo OpenStreetMap ─────────
+# O caminho "Gerar da BDGD" já infere por dentro de `cadastro_bdgd.montagem.montar`
+# — é a origem que nunca tem classe própria. Cadastro por upload que também não traz
+# essa coluna preenchida ficava com "(sem classe)" em 100% dos pontos e nenhuma
+# tentativa de inferir, porque `vias_osm.enriquecer` só era chamada no caminho BDGD —
+# achado em 08/09/2026, testando com um cadastro sem essa coluna mapeada.
+_sem_classe_nenhuma = tem_coordenadas and bool((base["_classe"] == ROTULO_SEM_CLASSE).all())
+if _sem_classe_nenhuma:
+    if st.button("🔎 Completar logradouro e classe viária pelo OpenStreetMap",
+                 key="am_completar_classe_osm"):
+        chave_osm = f"upload_{(municipio or 'municipio').replace(' ', '_')}_{(uf or 'XX')}"
+        try:
+            enriquecido, _ressalvas_osm = _completar_classe_osm(
+                base["_lat"], base["_lon"], chave_osm)
+            st.session_state["am_classe_osm"] = enriquecido
+            st.session_state["am_classe_osm_ressalvas"] = _ressalvas_osm
+            st.session_state["am_classe_osm_fingerprint"] = _fingerprint_base
+        except Exception as exc:
+            st.warning(
+                f"Não foi possível consultar o OpenStreetMap agora ({exc}). É o "
+                "serviço público (Overpass) sobrecarregado, não um problema do "
+                "cadastro — costuma responder numa nova tentativa."
+            )
+
+_classe_osm_valida = (
+    st.session_state.get("am_classe_osm") is not None
+    and st.session_state.get("am_classe_osm_fingerprint") == _fingerprint_base
+)
+if _classe_osm_valida:
+    _enriquecido = st.session_state["am_classe_osm"]
+    base["_classe"] = _enriquecido["classe_via"].map(normalizar_classe)
+    base["_logradouro"] = base["_logradouro"].mask(
+        base["_logradouro"].eq(""), _enriquecido["logradouro"])
+    for _r in st.session_state.get("am_classe_osm_ressalvas", []):
+        st.caption(f"⚠ {_r}")
+elif _sem_classe_nenhuma:
+    st.caption(
+        "Sem classificação viária no cadastro — clique acima para inferir pelo "
+        "OpenStreetMap, ou o sorteio segue com um único estrato de classe."
+    )
 
 
 # ── Passo 3: áreas especiais ────────────────────────────────────────────────
@@ -599,9 +669,6 @@ _passo(
     "mapeado no OpenStreetMap. Não exclui nada sozinho: confira no mapa e decida o que "
     "tirar da amostragem antes do dimensionamento.",
 )
-
-_fingerprint_base = (len(base), round(float(base["_lat"].sum(skipna=True)), 3),
-                     round(float(base["_lon"].sum(skipna=True)), 3))
 
 if not tem_coordenadas:
     st.caption("Sem coordenadas válidas nesta base, esta etapa fica indisponível.")
@@ -701,6 +768,45 @@ if _areas_validas:
                 detalhe=f"{len(indices_excluir)} pontos",
             )
             base = base.drop(index=list(indices_excluir))
+            tem_coordenadas = bool(base["_tem_coord"].any())
+
+
+# ── Filtro de universo por tecnologia (opcional) ────────────────────────────
+# Mesmo princípio da exclusão por área especial: reduz `base` ANTES do Passo 4, para
+# o N que entra na NBR 5426 já refletir o universo filtrado — ex.: sortear só entre
+# pontos já em LED, para uma inspeção de conformidade que não faz sentido em
+# tecnologia já substituída. Só aparece quando há coluna de tecnologia mapeada no
+# Passo 2 com mais de um valor distinto; caso contrário não haveria o que filtrar.
+# Ponto sem tecnologia informada vira opção própria e visível no multiselect — em vez
+# de uma regra escondida que sempre inclui ou sempre exclui o que não foi classificado,
+# o operador decide olhando a lista.
+_ROTULO_SEM_TECNOLOGIA = "(sem tecnologia informada)"
+_tecnologia_rotulada = base["_tecnologia"].replace("", _ROTULO_SEM_TECNOLOGIA)
+_tecnologias_presentes = sorted(_tecnologia_rotulada.unique())
+if len(_tecnologias_presentes) > 1:
+    st.markdown("**Filtrar por tecnologia** (opcional — reduz o universo do sorteio)")
+    _tecnologias_manter = st.multiselect(
+        "Tecnologias a manter no sorteio", _tecnologias_presentes,
+        default=_tecnologias_presentes, key="am_filtro_tecnologia",
+        placeholder="Nenhuma tecnologia selecionada",
+        help="Por padrão todas entram. Desmarque para restringir — por exemplo, "
+             "manter só LED e tirar as demais tecnologias do universo amostrável.",
+    )
+    if set(_tecnologias_manter) != set(_tecnologias_presentes):
+        _mantidos = _tecnologia_rotulada.isin(_tecnologias_manter)
+        _excluidos_tec = int((~_mantidos).sum())
+        if _excluidos_tec:
+            st.warning(
+                f"⚠️ **{_excluidos_tec} ponto(s)** fora das tecnologias marcadas saem "
+                "do universo do sorteio (Passo 4 em diante)."
+            )
+            registrar_acao(
+                "filtro_tecnologia_aplicado",
+                alvo=f"{municipio}/{uf}".strip("/"),
+                detalhe=f"mantidas: {', '.join(_tecnologias_manter) or '(nenhuma)'} — "
+                        f"{_excluidos_tec} pontos excluídos",
+            )
+            base = base[_mantidos]
             tem_coordenadas = bool(base["_tem_coord"].any())
 
 
