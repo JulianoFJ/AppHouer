@@ -704,12 +704,21 @@ if _areas_validas:
             f"(**{len(achados) / len(base):.1%}**) caem em área especial mapeada no OSM."
         )
 
-        tabela_achados = base.loc[achados.index, ["_id", "_logradouro", "_bairro", "_classe"]].copy()
+        # Latitude/Longitude entram para que esta planilha possa ser reaproveitada como
+        # cadastro de entrada em outra rodada da Amostragem — sem coordenada, um "IAE"
+        # separado (parque, quadra, cemitério) exportado daqui não tinha como voltar a
+        # ser sorteado (achado em 08/09/2026, testando o reaproveitamento).
+        tabela_achados = base.loc[
+            achados.index, ["_id", "_logradouro", "_bairro", "_classe", "_tecnologia",
+                            "_lat", "_lon"]
+        ].copy()
         tabela_achados["Categoria"] = achados["_area_categoria"]
         tabela_achados["Área"] = achados["_area_nome"]
         tabela_achados["OSM"] = achados["_area_url"]
         tabela_achados = tabela_achados.rename(columns={
-            "_id": "ID", "_logradouro": "Logradouro", "_bairro": "Bairro", "_classe": "Classe",
+            "_id": "ID", "_logradouro": "Logradouro", "_bairro": "Bairro",
+            "_classe": "Classe", "_tecnologia": "Tecnologia",
+            "_lat": "Latitude", "_lon": "Longitude",
         })
         st.dataframe(
             _para_exibicao(tabela_achados), use_container_width=True, height=240,
