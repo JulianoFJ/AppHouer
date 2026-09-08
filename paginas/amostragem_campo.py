@@ -859,8 +859,11 @@ with col_t1:
     )
 with col_t2:
     percentual_estrutural = st.slider(
-        "% medição estrutural", min_value=10, max_value=90, value=60, step=5,
-        key="am_prop", help="O restante vai para a medição de qualidade.",
+        "% medição estrutural", min_value=0, max_value=100, value=60, step=5,
+        key="am_prop",
+        help="O restante vai para a medição de qualidade. 0% e 100% são válidos — "
+             "útil, por exemplo, para amostrar um lote (como pontos de IAE) que só "
+             "precisa de medição de qualidade, sem frente estrutural.",
     )
 with col_t3:
     semente = st.number_input(

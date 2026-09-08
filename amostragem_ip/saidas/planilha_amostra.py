@@ -167,20 +167,24 @@ def _aba_formulario(wb: Workbook, resultado: ResultadoAmostragem, grupo: str) ->
     for indice, coluna in enumerate(df.columns, start=1):
         ws.column_dimensions[get_column_letter(indice)].width = max(10, min(38, len(str(coluna)) + 4))
 
-    # Validação por lista nas colunas de campo que têm domínio fechado.
+    # Validação por lista nas colunas de campo que têm domínio fechado. Sem linha de
+    # dado (grupo vazio — ex.: 0% estrutural, para amostrar um lote só de qualidade,
+    # como pontos de IAE) não há intervalo C3:C2 que faça sentido; openpyxl rejeita
+    # esse range (`ValueError: 2 must be greater than 3`), então a validação é pulada.
     primeira_coluna_campo = len(_COLUNAS_IDENTIFICACAO) + 1
     ultima_linha = len(df) + 2
-    for deslocamento, (rotulo, opcoes) in enumerate(campos):
-        if not opcoes:
-            continue
-        letra = get_column_letter(primeira_coluna_campo + deslocamento)
-        validacao = DataValidation(
-            type="list", formula1='"' + ",".join(opcoes) + '"', allow_blank=True
-        )
-        validacao.error = f"Valor fora da lista prevista para {rotulo}."
-        validacao.errorTitle = "Valor inválido"
-        ws.add_data_validation(validacao)
-        validacao.add(f"{letra}3:{letra}{ultima_linha}")
+    if ultima_linha >= 3:
+        for deslocamento, (rotulo, opcoes) in enumerate(campos):
+            if not opcoes:
+                continue
+            letra = get_column_letter(primeira_coluna_campo + deslocamento)
+            validacao = DataValidation(
+                type="list", formula1='"' + ",".join(opcoes) + '"', allow_blank=True
+            )
+            validacao.error = f"Valor fora da lista prevista para {rotulo}."
+            validacao.errorTitle = "Valor inválido"
+            ws.add_data_validation(validacao)
+            validacao.add(f"{letra}3:{letra}{ultima_linha}")
 
 
 def _aba_referencia(wb: Workbook, resultado: ResultadoAmostragem, grupo: str) -> None:
