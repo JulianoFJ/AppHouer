@@ -5,9 +5,12 @@ amostras (medição estrutural e medição de qualidade) dimensionadas pela NBR 
 Esta página é apenas a UI; a lógica vive em `amostragem_ip/`.
 """
 
+import io
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from acesso import registrar_acao
@@ -17,7 +20,7 @@ from amostragem_ip.leitura import ler_planilha
 from amostragem_ip.saidas import planilha_amostra
 from amostragem_ip.vias import identificar_vias_principais, vias_para_dataframe
 from cadastro_bdgd import montagem as cadastro_bdgd
-from cadastro_ip import municipio as municipio_ibge
+from cadastro_ip import areas_especiais, municipio as municipio_ibge
 from cadastro_ip.normalizacao import detectar_colunas
 
 
@@ -102,6 +105,137 @@ def _para_exibicao(df: pd.DataFrame) -> pd.DataFrame:
     return exibicao
 
 
+# ── Mapa do parque (antes do sorteio) ─────────────────────────────────────────
+CORES = {
+    "Parque (não sorteado)": "#334155",
+    "Medição estrutural": "#00A9E0",
+    "Medição de qualidade": "#F59E0B",
+}
+# Teto de marcadores por mapa. O mapa de conferência da amostra precisa de todos os
+# pontos sorteados e de um fundo denso; a prévia do parque, que é redesenhada a cada
+# clique em qualquer widget da página, vale menos que o tempo de resposta — daí o
+# teto menor nela (cada marcador vira JSON trafegado do servidor ao navegador).
+LIMITE_PONTOS_MAPA = 12000
+LIMITE_PONTOS_PREVIA = 4000
+
+
+def _enquadrar(lat: pd.Series, lon: pd.Series) -> tuple[dict, float, float]:
+    """
+    Centro e zoom que enquadram a nuvem de pontos. Devolve (centro, zoom, span em graus).
+
+    Existe porque o `zoom=11` fixo que estava aqui só servia para um município do
+    tamanho de Matozinhos: em capital ele corta metade do parque, e em cadastro de
+    consórcio intermunicipal mostra um quarteirão. E o centro não é a média — a média
+    é puxada por um punhado de pontos com coordenada errada, e o mapa acaba num lugar
+    onde não há ponto nenhum. O recorte de 2% a 98% descarta esses extremos antes de
+    medir; o mapa continua desenhando todos os pontos, inclusive os de fora.
+    """
+    p_lat = lat.quantile([0.02, 0.98]).to_numpy()
+    p_lon = lon.quantile([0.02, 0.98]).to_numpy()
+    centro = {"lat": float((p_lat[0] + p_lat[1]) / 2), "lon": float((p_lon[0] + p_lon[1]) / 2)}
+
+    # Mínimo de 0,004° (~450 m) evita zoom absurdo quando todos os pontos coincidem.
+    span_lat = max(float(p_lat[1] - p_lat[0]), 0.004)
+    span_lon = max(float(p_lon[1] - p_lon[0]), 0.004)
+
+    # Web Mercator: no zoom z cada tile de 512 px cobre 360/2^z graus de longitude. O
+    # enquadramento é o menor zoom que faz os dois eixos caberem na viewport, com uma
+    # margem de 20% para o ponto da borda não encostar na moldura.
+    largura, altura = 1100.0, 520.0
+    z_lon = np.log2(largura * 360.0 / (512.0 * span_lon))
+    z_lat = np.log2(altura * 360.0 / (512.0 * span_lat / np.cos(np.radians(centro["lat"]))))
+    zoom = float(np.clip(min(z_lon, z_lat) - 0.35, 3.0, 16.0))
+    return centro, zoom, max(span_lat, span_lon)
+
+
+def _mapa(df: pd.DataFrame, coluna_cor: str, titulo: str, cores=None,
+          limite: int = LIMITE_PONTOS_MAPA,
+          contorno: list[list[tuple[float, float]]] | None = None) -> None:
+    """Desenha o mapa dos pontos. Amostra o fundo quando o parque é grande demais."""
+    plotavel = df[df["_tem_coord"]]
+    if plotavel.empty:
+        formato = df.attrs.get("formato_coordenadas", "ausente")
+        st.warning(
+            "**Mapa indisponível: nenhuma coordenada válida.** "
+            + ("Nenhuma coluna de coordenada foi indicada no Passo 2."
+               if formato == "ausente" else
+               f"As coordenadas foram lidas como *{formato}*, mas nenhuma caiu dentro "
+               "do território brasileiro. Confira no Passo 2 se as colunas escolhidas "
+               "são mesmo latitude e longitude.")
+        )
+        return
+    if len(plotavel) > limite:
+        sorteados = plotavel[plotavel["_grupo"] != ""] if "_grupo" in plotavel else plotavel.iloc[0:0]
+        fundo = plotavel.drop(index=sorteados.index).sample(
+            n=max(limite - len(sorteados), 0), random_state=0
+        )
+        plotavel = pd.concat([fundo, sorteados])
+        st.caption(
+            f"Mapa com {len(plotavel):,} pontos — o parque foi subamostrado para não "
+            "travar o navegador; todos os pontos sorteados estão presentes.".replace(",", ".")
+        )
+
+    centro, zoom, span = _enquadrar(plotavel["_lat"], plotavel["_lon"])
+    figura = px.scatter_map(
+        plotavel,
+        lat="_lat",
+        lon="_lon",
+        color=coluna_cor,
+        color_discrete_map=cores,
+        category_orders={coluna_cor: list(cores)} if cores else None,
+        hover_name="_id",
+        hover_data={"_logradouro": True, "_bairro": True, "_classe": True,
+                    "_lat": False, "_lon": False},
+        center=centro,
+        zoom=zoom,
+        height=560,
+        map_style="open-street-map",
+    )
+    figura.update_traces(marker={"size": 7})
+    # Contorno do município, quando encontrado: navy sólido, por cima dos pontos. É só
+    # referência visual (varreu o município inteiro ou ficou num canto?) — cor fixa e
+    # escura porque precisa ler contra o tile do OpenStreetMap, que é sempre claro,
+    # independente do tema do app.
+    for anel in (contorno or []):
+        figura.add_trace(go.Scattermap(
+            lat=[p[1] for p in anel], lon=[p[0] for p in anel],
+            mode="lines", line={"width": 2.5, "color": "#1B3664"},
+            hoverinfo="skip", showlegend=False,
+        ))
+    # O título fica fora da figura (é `st.markdown`, acima): dentro dela ele dividia a
+    # faixa superior com a legenda horizontal e os dois se sobrepunham. A legenda passa
+    # a flutuar sobre o mapa, num cartão translúcido — não rouba altura do mapa nem
+    # some no fundo claro do OpenStreetMap.
+    figura.update_layout(
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        legend={"orientation": "h", "yanchor": "top", "y": 0.99, "xanchor": "left",
+                "x": 0.01, "title_text": "", "bgcolor": "rgba(11,17,30,.82)",
+                "bordercolor": "#2f3f5c", "borderwidth": 1,
+                "font": {"color": "#e2e8f0"}},
+        paper_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#e2e8f0"},
+    )
+    st.markdown(f"**{titulo}**")
+    # `theme=None`: sem isto o Streamlit reaplica o tema ativo do app por cima da
+    # figura (herdado do `st.plotly_chart` desde que o tema global passou a claro em
+    # 08/09/2026) e sobrescreve justamente a cor da fonte da legenda — o cartão
+    # continua escuro de propósito (flutua sobre o tile claro do OpenStreetMap), mas o
+    # texto virava escuro também, ficando ilegível. `theme=None` mantém a figura
+    # imune a qualquer tema futuro do app, que é o comportamento certo para um mapa
+    # cujo estilo depende do basemap, não da página.
+    st.plotly_chart(figura, use_container_width=True, theme=None)
+
+    # Um município cabe em ~0,5°. Espalhamento maior é sinal de coordenada trocada ou
+    # de mistura de bases — e é justamente o caso em que o mapa "abre no nada" e
+    # parece quebrado. Dizer o motivo é mais útil que deixar o operador adivinhar.
+    if span > 1.0:
+        st.warning(
+            f"Os pontos se espalham por {span:.1f}° (~{span * 111:.0f} km) — muito mais "
+            "que um município. Há coordenada errada na base, ou a coluna escolhida no "
+            "Passo 2 não é a de coordenada. O mapa abriu afastado para mostrar tudo."
+        )
+
+
 # ── Etapas caras, memoizadas ──────────────────────────────────────────────────
 # O Streamlit reexecuta a página inteira a cada clique em qualquer widget. Sem cache,
 # mexer no slider do NQA refazia a preparação da base e a identificação de vias: 0,6 s
@@ -118,6 +252,16 @@ def _vias_principais(chaves: pd.DataFrame, teto: int):
     """Recebe só as 4 colunas que o ranking usa — hashear a base inteira custaria mais
     que recalcular em cadastro grande."""
     return identificar_vias_principais(chaves, col_chave="_chave_via", teto=teto)
+
+
+@st.cache_data(show_spinner="Consultando o OpenStreetMap…", max_entries=5)
+def _areas_especiais(lat: pd.Series, lon: pd.Series):
+    return areas_especiais.buscar(lat, lon)
+
+
+@st.cache_data(show_spinner=False, max_entries=5)
+def _contorno_municipio(lat: pd.Series, lon: pd.Series, nome_municipio: str):
+    return areas_especiais.buscar_contorno_municipio(lat, lon, nome_municipio)
 
 
 # ── Identificação do município ────────────────────────────────────────────────
@@ -430,10 +574,137 @@ if len(candidatas) > 1:
 
 tem_coordenadas = bool(base["_tem_coord"].any())
 
+# Contorno do município para os três mapas da página (prévia, áreas especiais, amostra
+# sorteada). Uma chamada por município — `st.cache_data` faz a segunda em diante ser
+# grátis — não atrás de botão porque é 1 requisição, não centenas, e o mapa que ela
+# enriquece já aparece no primeiro render desta página. Nunca lança: contorno não
+# encontrado é lista vazia, o mapa segue igual sem ele.
+contorno_municipio = (
+    _contorno_municipio(base["_lat"], base["_lon"], municipio or "")
+    if tem_coordenadas else []
+)
 
-# ── Passo 3: dimensionamento pela NBR 5426 ────────────────────────────────────
+
+# ── Passo 3: áreas especiais ────────────────────────────────────────────────
+# Fica ANTES do dimensionamento (Passo 4) de propósito: se o operador confirmar
+# exclusão aqui, `base` é filtrada nesta mesma passagem do script, e o N que entra na
+# NBR 5426 — e tudo que vem depois — já reflete a população reduzida. Decisão de
+# 08/09/2026: exclusão é sempre revisão manual, nunca automática — o polígono do OSM
+# tem seu próprio erro de traçado (testado em São José da Lapa, deslocamento de poucos
+# metros em relação ao cadastro real), e herdar isso direto no N da norma sem alguém
+# olhar seria descuido.
 _passo(
-    "Passo 3 — Dimensionamento (ABNT NBR 5426)",
+    "Passo 3 — Áreas especiais (opcional)",
+    "Identifica pontos dentro de parque/praça, cemitério ou campo/quadra/ginásio "
+    "mapeado no OpenStreetMap. Não exclui nada sozinho: confira no mapa e decida o que "
+    "tirar da amostragem antes do dimensionamento.",
+)
+
+_fingerprint_base = (len(base), round(float(base["_lat"].sum(skipna=True)), 3),
+                     round(float(base["_lon"].sum(skipna=True)), 3))
+
+if not tem_coordenadas:
+    st.caption("Sem coordenadas válidas nesta base, esta etapa fica indisponível.")
+elif st.button("🔎 Identificar áreas especiais (OpenStreetMap)", key="am_buscar_areas"):
+    try:
+        resultado_areas = _areas_especiais(base["_lat"], base["_lon"])
+        st.session_state["am_areas_resultado"] = resultado_areas
+        st.session_state["am_areas_fingerprint"] = _fingerprint_base
+    except Exception as exc:
+        st.warning(
+            f"Não foi possível consultar o OpenStreetMap agora: {exc} "
+            "Esta etapa é opcional — a amostragem segue normalmente sem ela."
+        )
+
+_areas_validas = (
+    st.session_state.get("am_areas_resultado") is not None
+    and st.session_state.get("am_areas_fingerprint") == _fingerprint_base
+)
+if st.session_state.get("am_areas_resultado") is not None and not _areas_validas:
+    st.caption("O cadastro mudou desde a última busca — clique de novo para atualizar.")
+
+if _areas_validas:
+    resultado_areas = st.session_state["am_areas_resultado"]
+    achados = resultado_areas[resultado_areas["_area_categoria"] != ""]
+
+    if achados.empty:
+        st.success("Nenhum ponto caiu em parque/praça, cemitério ou campo/quadra/ginásio mapeado no OSM.")
+    else:
+        st.caption(
+            f"**{len(achados)}** de {len(base)} pontos "
+            f"(**{len(achados) / len(base):.1%}**) caem em área especial mapeada no OSM."
+        )
+
+        tabela_achados = base.loc[achados.index, ["_id", "_logradouro", "_bairro", "_classe"]].copy()
+        tabela_achados["Categoria"] = achados["_area_categoria"]
+        tabela_achados["Área"] = achados["_area_nome"]
+        tabela_achados["OSM"] = achados["_area_url"]
+        tabela_achados = tabela_achados.rename(columns={
+            "_id": "ID", "_logradouro": "Logradouro", "_bairro": "Bairro", "_classe": "Classe",
+        })
+        st.dataframe(
+            _para_exibicao(tabela_achados), use_container_width=True, height=240,
+            column_config={"OSM": st.column_config.LinkColumn("OSM", display_text="abrir ↗")},
+        )
+
+        CORES_AREAS = {
+            "Fora de área especial": "#94A3B8",
+            "Parque/praça": "#17A672",
+            "Cemitério": "#8B5CF6",
+            "Campo/quadra/ginásio": "#F59E0B",
+        }
+        mapa_areas = base.copy()
+        mapa_areas["_area"] = "Fora de área especial"
+        mapa_areas.loc[achados.index, "_area"] = achados["_area_categoria"]
+        _mapa(mapa_areas, "_area", "Pontos por área especial", cores=CORES_AREAS, contorno=contorno_municipio)
+
+        buffer_areas = io.BytesIO()
+        tabela_achados.to_excel(buffer_areas, index=False, sheet_name="Áreas especiais")
+        st.download_button(
+            "⬇️ Baixar pontos em área especial (.xlsx)",
+            data=buffer_areas.getvalue(),
+            file_name=f"{(municipio or 'municipio').replace(' ', '_')} - Pontos em Área Especial.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        st.markdown("**Excluir da amostragem** (some do N antes do dimensionamento no Passo 4):")
+        col_exc1, col_exc2 = st.columns(2)
+        with col_exc1:
+            categorias_presentes = sorted(achados["_area_categoria"].unique())
+            excluir_categorias = st.multiselect(
+                "Por categoria", categorias_presentes, default=[], key="am_areas_excluir_cat",
+                placeholder="Nenhuma categoria selecionada",
+                help="Marca todos os pontos da categoria para exclusão.",
+            )
+        with col_exc2:
+            excluir_individual = st.multiselect(
+                "Pontos individuais adicionais",
+                options=list(achados.index),
+                format_func=lambda i: f"{base.loc[i, '_id']} — {achados.loc[i, '_area_nome']}",
+                default=[], key="am_areas_excluir_ids",
+                placeholder="Nenhum ponto selecionado",
+                help="Para excluir um ponto específico sem excluir a categoria inteira.",
+            )
+
+        indices_excluir = set(achados[achados["_area_categoria"].isin(excluir_categorias)].index)
+        indices_excluir |= set(excluir_individual)
+        if indices_excluir:
+            st.warning(
+                f"⚠️ **{len(indices_excluir)} ponto(s)** serão excluídos do dimensionamento "
+                "(Passo 4) e do sorteio em diante."
+            )
+            registrar_acao(
+                "areas_especiais_excluidas",
+                alvo=f"{municipio}/{uf}".strip("/"),
+                detalhe=f"{len(indices_excluir)} pontos",
+            )
+            base = base.drop(index=list(indices_excluir))
+            tem_coordenadas = bool(base["_tem_coord"].any())
+
+
+# ── Passo 4: dimensionamento pela NBR 5426 ────────────────────────────────────
+_passo(
+    "Passo 4 — Dimensionamento (ABNT NBR 5426)",
     "O tamanho vem da tabela da norma pelo tamanho do parque, nível de inspeção e NQA. "
     "O campo final vem pré-preenchido com esse número e pode ser aumentado — é prática "
     "levar folga sobre a norma para absorver perdas de campo.",
@@ -522,9 +793,9 @@ with col_o3:
     )
 
 
-# ── Passo 4: vias principais ──────────────────────────────────────────────────
+# ── Passo 5: vias principais ──────────────────────────────────────────────────
 _passo(
-    "Passo 4 — Vias principais",
+    "Passo 5 — Vias principais",
     "Detectadas pelo tipo do logradouro (avenida, rodovia, estrada, anel viário, "
     "marginal) e pela classe de iluminação mais exigente. Desmarque as que não quiser "
     "obrigar, ou marque outras.",
@@ -572,117 +843,6 @@ if ressalvas_preparacao:
             st.markdown(f"- {ressalva}")
 
 
-# ── Mapa do parque (antes do sorteio) ─────────────────────────────────────────
-CORES = {
-    "Parque (não sorteado)": "#334155",
-    "Medição estrutural": "#00A9E0",
-    "Medição de qualidade": "#F59E0B",
-}
-# Teto de marcadores por mapa. O mapa de conferência da amostra precisa de todos os
-# pontos sorteados e de um fundo denso; a prévia do parque, que é redesenhada a cada
-# clique em qualquer widget da página, vale menos que o tempo de resposta — daí o
-# teto menor nela (cada marcador vira JSON trafegado do servidor ao navegador).
-LIMITE_PONTOS_MAPA = 12000
-LIMITE_PONTOS_PREVIA = 4000
-
-
-def _enquadrar(lat: pd.Series, lon: pd.Series) -> tuple[dict, float, float]:
-    """
-    Centro e zoom que enquadram a nuvem de pontos. Devolve (centro, zoom, span em graus).
-
-    Existe porque o `zoom=11` fixo que estava aqui só servia para um município do
-    tamanho de Matozinhos: em capital ele corta metade do parque, e em cadastro de
-    consórcio intermunicipal mostra um quarteirão. E o centro não é a média — a média
-    é puxada por um punhado de pontos com coordenada errada, e o mapa acaba num lugar
-    onde não há ponto nenhum. O recorte de 2% a 98% descarta esses extremos antes de
-    medir; o mapa continua desenhando todos os pontos, inclusive os de fora.
-    """
-    p_lat = lat.quantile([0.02, 0.98]).to_numpy()
-    p_lon = lon.quantile([0.02, 0.98]).to_numpy()
-    centro = {"lat": float((p_lat[0] + p_lat[1]) / 2), "lon": float((p_lon[0] + p_lon[1]) / 2)}
-
-    # Mínimo de 0,004° (~450 m) evita zoom absurdo quando todos os pontos coincidem.
-    span_lat = max(float(p_lat[1] - p_lat[0]), 0.004)
-    span_lon = max(float(p_lon[1] - p_lon[0]), 0.004)
-
-    # Web Mercator: no zoom z cada tile de 512 px cobre 360/2^z graus de longitude. O
-    # enquadramento é o menor zoom que faz os dois eixos caberem na viewport, com uma
-    # margem de 20% para o ponto da borda não encostar na moldura.
-    largura, altura = 1100.0, 520.0
-    z_lon = np.log2(largura * 360.0 / (512.0 * span_lon))
-    z_lat = np.log2(altura * 360.0 / (512.0 * span_lat / np.cos(np.radians(centro["lat"]))))
-    zoom = float(np.clip(min(z_lon, z_lat) - 0.35, 3.0, 16.0))
-    return centro, zoom, max(span_lat, span_lon)
-
-
-def _mapa(df: pd.DataFrame, coluna_cor: str, titulo: str, cores=None,
-          limite: int = LIMITE_PONTOS_MAPA) -> None:
-    """Desenha o mapa dos pontos. Amostra o fundo quando o parque é grande demais."""
-    plotavel = df[df["_tem_coord"]]
-    if plotavel.empty:
-        formato = df.attrs.get("formato_coordenadas", "ausente")
-        st.warning(
-            "**Mapa indisponível: nenhuma coordenada válida.** "
-            + ("Nenhuma coluna de coordenada foi indicada no Passo 2."
-               if formato == "ausente" else
-               f"As coordenadas foram lidas como *{formato}*, mas nenhuma caiu dentro "
-               "do território brasileiro. Confira no Passo 2 se as colunas escolhidas "
-               "são mesmo latitude e longitude.")
-        )
-        return
-    if len(plotavel) > limite:
-        sorteados = plotavel[plotavel["_grupo"] != ""] if "_grupo" in plotavel else plotavel.iloc[0:0]
-        fundo = plotavel.drop(index=sorteados.index).sample(
-            n=max(limite - len(sorteados), 0), random_state=0
-        )
-        plotavel = pd.concat([fundo, sorteados])
-        st.caption(
-            f"Mapa com {len(plotavel):,} pontos — o parque foi subamostrado para não "
-            "travar o navegador; todos os pontos sorteados estão presentes.".replace(",", ".")
-        )
-
-    centro, zoom, span = _enquadrar(plotavel["_lat"], plotavel["_lon"])
-    figura = px.scatter_map(
-        plotavel,
-        lat="_lat",
-        lon="_lon",
-        color=coluna_cor,
-        color_discrete_map=cores,
-        category_orders={coluna_cor: list(cores)} if cores else None,
-        hover_name="_id",
-        hover_data={"_logradouro": True, "_bairro": True, "_classe": True,
-                    "_lat": False, "_lon": False},
-        center=centro,
-        zoom=zoom,
-        height=560,
-        map_style="open-street-map",
-    )
-    figura.update_traces(marker={"size": 7})
-    # O título fica fora da figura (é `st.markdown`, acima): dentro dela ele dividia a
-    # faixa superior com a legenda horizontal e os dois se sobrepunham. A legenda passa
-    # a flutuar sobre o mapa, num cartão translúcido — não rouba altura do mapa nem
-    # some no fundo claro do OpenStreetMap.
-    figura.update_layout(
-        margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        legend={"orientation": "h", "yanchor": "top", "y": 0.99, "xanchor": "left",
-                "x": 0.01, "title_text": "", "bgcolor": "rgba(11,17,30,.82)",
-                "bordercolor": "#2f3f5c", "borderwidth": 1},
-        paper_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e2e8f0"},
-    )
-    st.markdown(f"**{titulo}**")
-    st.plotly_chart(figura, use_container_width=True)
-
-    # Um município cabe em ~0,5°. Espalhamento maior é sinal de coordenada trocada ou
-    # de mistura de bases — e é justamente o caso em que o mapa "abre no nada" e
-    # parece quebrado. Dizer o motivo é mais útil que deixar o operador adivinhar.
-    if span > 1.0:
-        st.warning(
-            f"Os pontos se espalham por {span:.1f}° (~{span * 111:.0f} km) — muito mais "
-            "que um município. Há coordenada errada na base, ou a coluna escolhida no "
-            "Passo 2 não é a de coordenada. O mapa abriu afastado para mostrar tudo."
-        )
-
 
 resultado = st.session_state[SS["resultado"]]
 
@@ -695,12 +855,12 @@ if resultado is None:
     if tem_coordenadas and formato != "graus decimais":
         st.caption(f"🧭 Coordenadas reconhecidas como **{formato}**.")
     _mapa(base, "_classe", "Parque de IP por classe de iluminação",
-          limite=LIMITE_PONTOS_PREVIA)
+          limite=LIMITE_PONTOS_PREVIA, contorno=contorno_municipio)
 
 
-# ── Passo 5: sorteio ──────────────────────────────────────────────────────────
+# ── Passo 6: sorteio ──────────────────────────────────────────────────────────
 _passo(
-    "Passo 5 — Sortear a amostra",
+    "Passo 6 — Sortear a amostra",
     "O sorteio é aleatório dentro de cada estrato e reprodutível pela semente.",
 )
 
@@ -752,10 +912,10 @@ if mensagem:
     st.success(mensagem)
 
 
-# ── Passo 6: resultado ────────────────────────────────────────────────────────
+# ── Passo 7: resultado ────────────────────────────────────────────────────────
 if resultado is not None:
     _passo(
-        "Passo 6 — Conferência e download",
+        "Passo 7 — Conferência e download",
         "Confira no mapa se a amostra varreu o município antes de mandar a equipe a campo.",
     )
 
@@ -786,7 +946,7 @@ if resultado is not None:
     mapa_df["Camada"] = mapa_df["_grupo"].map(
         {GRUPO_ESTRUTURAL: "Medição estrutural", GRUPO_QUALIDADE: "Medição de qualidade"}
     ).fillna("Parque (não sorteado)")
-    _mapa(mapa_df, "Camada", "Amostra sorteada sobre o parque", cores=CORES)
+    _mapa(mapa_df, "Camada", "Amostra sorteada sobre o parque", cores=CORES, contorno=contorno_municipio)
 
     aba_classes, aba_vias, aba_ressalvas, aba_relatorio = st.tabs(
         ["Cobertura por classe", "Vias principais", "Ressalvas", "Relatório"]
