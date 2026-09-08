@@ -40,23 +40,25 @@ st.markdown(
         :root {
             --marca-navy: #1B3664;
             --marca-teal: #00A9E0;
-            --bg-dark: #0b111e;
-            --card-bg: #12192b;
-            --card-border: #1f2937;
-            --campo-bg: #182238;
-            --campo-borda: #2f3f5c;
-            --campo-borda-hover: #43597f;
+            --bg-claro: #F4F6FA;
+            --card-bg: #FFFFFF;
+            --card-border: #E2E8F0;
+            --texto: #1B2434;
+            --texto-fraco: #5B6579;
+            --campo-bg: #FFFFFF;
+            --campo-borda: #CBD5E1;
+            --campo-borda-hover: #94A3B8;
         }
 
         .stApp {
             background:
-                radial-gradient(circle at 0% 0%, #1B366433, transparent),
-                radial-gradient(circle at 100% 100%, #00A9E011, transparent),
-                #0b111e;
+                radial-gradient(circle at 0% 0%, #1B36640D, transparent),
+                radial-gradient(circle at 100% 100%, #00A9E00D, transparent),
+                #F4F6FA;
         }
 
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0b111e 0%, #12192b 100%);
+            background: var(--card-bg);
             border-right: 1px solid var(--card-border);
         }
 
@@ -86,8 +88,9 @@ st.markdown(
         [data-baseweb="input"] input, [data-baseweb="textarea"] textarea,
         [data-baseweb="base-input"] input { background-color: transparent !important; }
 
-        /* Placeholder legível: no cinza padrão ele sumia junto com a borda. */
-        input::placeholder, textarea::placeholder { color: #7c8ba5 !important; opacity: 1; }
+        /* Placeholder legível: cinza médio, mais claro que o texto mas ainda contra a
+           borda do campo. */
+        input::placeholder, textarea::placeholder { color: var(--texto-fraco) !important; opacity: 1; }
 
         /* A dica "Press Enter to submit form" que o Streamlit injeta ao focar um campo.
            Ela é `position:absolute; right:9px; bottom:2px` DENTRO do campo, então passa
@@ -101,7 +104,7 @@ st.markdown(
 
         /* Rótulo com peso — separa o nome do campo do texto explicativo em volta. */
         [data-testid="stWidgetLabel"] p {
-            color: #dbe4f0 !important; font-weight: 600 !important;
+            color: var(--texto) !important; font-weight: 600 !important;
         }
 
         /* Upload e data editor: mesmas bordas, para não parecerem áreas mortas. */
@@ -129,12 +132,12 @@ usuario = exigir_login()
 with st.sidebar:
     st.markdown(
         """
-        <div style="text-align:center; padding: 0.5rem 0 1.2rem 0; border-bottom: 1px solid #1f2937; margin-bottom: 0.5rem;">
+        <div style="text-align:center; padding: 0.5rem 0 1.2rem 0; border-bottom: 1px solid #E2E8F0; margin-bottom: 0.5rem;">
             <div style="font-size: 1.5rem; font-weight: 800;
-                        background: linear-gradient(90deg, #ffffff, #00A9E0);
+                        background: linear-gradient(90deg, #1B3664, #00A9E0);
                         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
                         letter-spacing: -0.5px;">PLATAFORMA IP</div>
-            <div style="font-size: 0.72rem; color: #94a3b8; letter-spacing: 0.15em; text-transform: uppercase;">
+            <div style="font-size: 0.72rem; color: #5B6579; letter-spacing: 0.15em; text-transform: uppercase;">
                 Iluminação Pública
             </div>
         </div>

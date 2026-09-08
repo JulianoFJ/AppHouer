@@ -93,24 +93,24 @@ def _render_card(app: dict):
     st.markdown(
         f"""
         <div style="
-            background: rgba(18, 25, 43, 0.6);
-            backdrop-filter: blur(10px);
-            border: 1px solid #1f2937;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
             border-top: 4px solid #00A9E0;
             border-radius: 20px;
             padding: 1.8rem;
             min-height: 290px;
             margin-bottom: 0.8rem;
+            box-shadow: 0 1px 3px rgba(27, 36, 52, 0.06);
         ">
             <div style="font-size: 2.8rem; margin-bottom: 0.5rem;">{app["icon"]}</div>
-            <div style="font-size: 1.35rem; font-weight: 700; color: #f8fafc; margin-bottom: 0.2rem;">
+            <div style="font-size: 1.35rem; font-weight: 700; color: #1B2434; margin-bottom: 0.2rem;">
                 {app["title"]}
             </div>
-            <div style="font-size: 0.85rem; color: #00A9E0; font-weight: 600;
+            <div style="font-size: 0.85rem; color: #0B84AE; font-weight: 600;
                         text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 1rem;">
                 {app["subtitle"]}
             </div>
-            <div style="font-size: 0.9rem; color: #cbd5e1; line-height: 1.5; margin-bottom: 1.2rem;">
+            <div style="font-size: 0.9rem; color: #5B6579; line-height: 1.5; margin-bottom: 1.2rem;">
                 {app["description"]}
             </div>
             <div>{tags_html}</div>
@@ -133,12 +133,12 @@ st.markdown(
     """
     <div style="margin-top: 1rem; margin-bottom: 2rem;">
         <div style="font-size: 3.2rem; font-weight: 800;
-                    background: linear-gradient(90deg, #ffffff, #00A9E0);
+                    background: linear-gradient(90deg, #1B3664, #00A9E0);
                     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
                     letter-spacing: -1px; line-height: 1.1;">
             Plataforma IP
         </div>
-        <div style="font-size: 1.1rem; color: #94a3b8; margin-top: 0.5rem;">
+        <div style="font-size: 1.1rem; color: #5B6579; margin-top: 0.5rem;">
             Soluções de engenharia para iluminação pública municipal
         </div>
     </div>
@@ -147,8 +147,8 @@ st.markdown(
 )
 
 st.markdown(
-    '<div style="font-size: 1.3rem; font-weight: 700; color: #f8fafc; '
-    'margin-bottom: 1.2rem; padding-bottom: 0.6rem; border-bottom: 1px solid #1f2937;">'
+    '<div style="font-size: 1.3rem; font-weight: 700; color: #1B2434; '
+    'margin-bottom: 1.2rem; padding-bottom: 0.6rem; border-bottom: 1px solid #E2E8F0;">'
     "Aplicações disponíveis</div>",
     unsafe_allow_html=True,
 )
@@ -161,9 +161,9 @@ for idx, app in enumerate(APPS_CARDS):
 st.markdown(
     """
     <div style="margin-top: 2.5rem; padding: 1.5rem; border-radius: 12px;
-                background: rgba(27, 54, 100, 0.15); border-left: 3px solid #00A9E0;">
-        <div style="font-size: 0.95rem; color: #cbd5e1;">
-            <b style="color: #f8fafc;">Novas funcionalidades em breve.</b>
+                background: #F0F7FC; border-left: 3px solid #00A9E0;">
+        <div style="font-size: 0.95rem; color: #475569;">
+            <b style="color: #1B2434;">Novas funcionalidades em breve.</b>
             A plataforma é modular — novas ferramentas podem ser adicionadas como páginas independentes.
         </div>
     </div>

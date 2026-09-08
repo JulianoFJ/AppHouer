@@ -266,8 +266,8 @@ def _tela_login() -> None:
           /* A navegação lateral não existe antes do login; escondê-la evita o flash de
              uma sidebar vazia enquanto o formulário monta. */
           section[data-testid="stSidebar"] { display: none; }
-          [data-testid="stForm"] { border: 1px solid #1f2937; border-radius: 14px;
-              padding: 1.4rem 1.4rem 0.6rem 1.4rem; background: #12192b;
+          [data-testid="stForm"] { border: 1px solid #E2E8F0; border-radius: 14px;
+              padding: 1.4rem 1.4rem 0.6rem 1.4rem; background: #FFFFFF;
               max-width: 420px; margin: 0 auto; }
           .block-container { max-width: 560px; }
 
@@ -284,10 +284,10 @@ def _tela_login() -> None:
         """
         <div style="text-align:center; margin: 2.2rem 0 1.4rem 0;">
           <div style="font-size:2.4rem; font-weight:800;
-                      background: linear-gradient(90deg,#ffffff,#00A9E0);
+                      background: linear-gradient(90deg,#1B3664,#00A9E0);
                       -webkit-background-clip:text; -webkit-text-fill-color:transparent;
                       letter-spacing:-1px;">Plataforma IP</div>
-          <div style="font-size:.78rem; color:#94a3b8; letter-spacing:.15em;
+          <div style="font-size:.78rem; color:#5B6579; letter-spacing:.15em;
                       text-transform:uppercase;">Engenharia de Iluminação Pública</div>
         </div>
         """,

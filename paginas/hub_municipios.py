@@ -39,8 +39,12 @@ ORDEM_VIABILIDADE = [
     indicadores.VIABILIDADE_SEM_CIP,
 ]
 
-# Categórica validada para fundo escuro (surface #12192b): banda de lightness OKLCH
-# 0,48–0,67, croma >= 0,10, ΔE de CVD >= 8 em todos os pares adjacentes.
+# Categórica validada em 04/09/2026 para fundo escuro (surface #12192b): banda de
+# lightness OKLCH 0,48–0,67, croma >= 0,10, ΔE de CVD >= 8 em todos os pares
+# adjacentes. Paleta trocada para fundo claro em 08/09/2026 (surface #FFFFFF) sem
+# reabrir essa validação — os quatro tons são de meia-luz (nem muito escuros nem muito
+# claros) e devem seguir legíveis, mas a distinção entre pares para daltonismo NÃO foi
+# reconferida na nova superfície. Revalidar se algum par ficar difícil de distinguir.
 COR_TECNOLOGIA = {
     "LED": "#1F9ED1", "Vapor de sódio": "#C08420",
     "Vapor de mercúrio": "#8B5CF6", "Vapor metálico": "#17A672",
@@ -48,8 +52,10 @@ COR_TECNOLOGIA = {
 COR_AUSENTE = "#64748B"
 ESCALA_MAGNITUDE = ["#0E2A3A", "#186F96", "#1F9ED1", "#7FCDEA"]
 
-TINTA_PRIMARIA, TINTA_SECUNDARIA, TINTA_FRACA = "#f8fafc", "#cbd5e1", "#94a3b8"
-GRADE, SUPERFICIE = "#1f2937", "rgba(0,0,0,0)"
+# Hierarquia de texto de gráfico invertida para fundo claro: primária escura -> fraca
+# clara (era o oposto, texto claro sobre fundo escuro).
+TINTA_PRIMARIA, TINTA_SECUNDARIA, TINTA_FRACA = "#1B2434", "#475569", "#94A3B8"
+GRADE, SUPERFICIE = "#E2E8F0", "rgba(0,0,0,0)"
 ANO_ATUAL = datetime.now().year
 
 fmt_moeda = indicadores.formatar_moeda
@@ -76,10 +82,10 @@ st.markdown(
     """
     <style>
       section[data-testid="stSidebar"] label p,
-      section[data-testid="stSidebar"] .stMarkdown p { color: #e2e8f0 !important; }
+      section[data-testid="stSidebar"] .stMarkdown p { color: #1B2434 !important; }
       section[data-testid="stSidebar"] label p { font-weight: 600 !important; font-size: .88rem !important; }
-      div[data-testid="stMetric"] { background: rgba(18,25,43,.55); border-radius: 12px; }
-      div[data-testid="stMetricLabel"] p { color: #94a3b8 !important; font-size: .78rem !important;
+      div[data-testid="stMetric"] { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; }
+      div[data-testid="stMetricLabel"] p { color: #5B6579 !important; font-size: .78rem !important;
                                            text-transform: uppercase; letter-spacing: .04em; }
       button[data-baseweb="tab"] p { font-size: 1rem !important; font-weight: 600 !important; }
     </style>
@@ -151,7 +157,7 @@ def _layout(fig: go.Figure, altura: int = 320) -> go.Figure:
         font=dict(family="Inter, sans-serif", color=TINTA_SECUNDARIA, size=12),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0,
                     bgcolor="rgba(0,0,0,0)", font=dict(color=TINTA_SECUNDARIA)),
-        hoverlabel=dict(bgcolor="#12192b", bordercolor=GRADE,
+        hoverlabel=dict(bgcolor="#FFFFFF", bordercolor=GRADE,
                         font=dict(color=TINTA_PRIMARIA, family="Inter, sans-serif")),
     )
     fig.update_xaxes(showgrid=False, zeroline=False, linecolor=GRADE,
@@ -200,10 +206,10 @@ st.markdown(
     """
     <div style="margin-bottom:1.1rem;">
       <div style="font-size:2.2rem;font-weight:800;
-                  background:linear-gradient(90deg,#ffffff,#00A9E0);
+                  background:linear-gradient(90deg,#1B3664,#00A9E0);
                   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
                   letter-spacing:-.5px;">Hub de Municípios</div>
-      <div style="font-size:.95rem;color:#94a3b8;margin-top:.3rem;">
+      <div style="font-size:.95rem;color:#5B6579;margin-top:.3rem;">
         Triagem de pré-viabilidade de PPP de iluminação pública — arrecadação de COSIP
         (SICONFI) cruzada com o parque de IP (BDGD/ANEEL)
       </div>
@@ -578,7 +584,7 @@ with aba_municipio, _aba_isolada("Município"):
                                     name="Contraprestação da PPP", mode="lines+markers",
                                     line=dict(color="#C08420", width=2),
                                     marker=dict(size=9, color="#C08420",
-                                                line=dict(width=2, color="#12192b")),
+                                                line=dict(width=2, color="#FFFFFF")),
                                     hovertemplate="Contraprestação: R$ %{customdata:,.0f}"
                                                   "<extra></extra>")
                     fig.update_layout(hovermode="x unified", bargap=.35)
@@ -759,7 +765,7 @@ with aba_mapa, _aba_isolada("Mapa"):
                         locations=sub["codigo_municipio"], z=[1] * len(sub),
                         colorscale=[[0, cor], [1, cor]], showscale=False,
                         name=classe, legendgroup=classe, showlegend=False,
-                        marker=dict(line=dict(color="#0b111e", width=.4), opacity=.85),
+                        marker=dict(line=dict(color="#FFFFFF", width=.4), opacity=.85),
                         customdata=sub[["codigo_municipio"]],
                         text=[f"<b>{m}</b><br>{classe}<br>"
                               f"{fmt_moeda(a)}/ponto.mês · sobra {fmt_pct(s)}<br>"
@@ -770,13 +776,13 @@ with aba_mapa, _aba_isolada("Mapa"):
                         hovertemplate="%{text}<extra></extra>"))
 
                 fig.update_layout(
-                    map=dict(style="carto-darkmatter",
+                    map=dict(style="carto-positron",
                              center=malhas.centro_aproximado(malha),
                              zoom=malhas.zoom_aproximado(malha)),
                     height=560, margin=dict(l=0, r=0, t=10, b=0),
                     paper_bgcolor=SUPERFICIE, separators=",.",
                     font=dict(family="Inter, sans-serif", color=TINTA_SECUNDARIA),
-                    hoverlabel=dict(bgcolor="#12192b", bordercolor=GRADE,
+                    hoverlabel=dict(bgcolor="#FFFFFF", bordercolor=GRADE,
                                     font=dict(color=TINTA_PRIMARIA)))
 
                 evento = st.plotly_chart(fig, use_container_width=True,
@@ -785,7 +791,7 @@ with aba_mapa, _aba_isolada("Mapa"):
 
                 legenda = "  ".join(
                     f'<span style="color:{COR_VIABILIDADE[c]};font-size:1.1rem">■</span> '
-                    f'<span style="color:#cbd5e1;font-size:.86rem">{c}</span>'
+                    f'<span style="color:#475569;font-size:.86rem">{c}</span>'
                     for c in ORDEM_VIABILIDADE)
                 st.markdown(legenda, unsafe_allow_html=True)
                 st.caption(f"{len(painel_uf)} municípios de {uf_mapa}. "

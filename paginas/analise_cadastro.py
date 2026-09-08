@@ -39,25 +39,26 @@ st.markdown(
     <style>
         .ac-hero-title {
             font-size: 2.6rem; font-weight: 800;
-            background: linear-gradient(90deg, #ffffff, #00A9E0);
+            background: linear-gradient(90deg, #1B3664, #00A9E0);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             letter-spacing: -1px; margin-bottom: 0.2rem;
         }
-        .ac-hero-sub { font-size: 1rem; color: #94a3b8; margin-bottom: 1.5rem; }
+        .ac-hero-sub { font-size: 1rem; color: #5B6579; margin-bottom: 1.5rem; }
         .ac-step {
-            background: rgba(18, 25, 43, 0.6);
-            border: 1px solid #1f2937;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
             border-left: 4px solid #00A9E0;
             border-radius: 12px;
             padding: 1.2rem 1.4rem;
             margin-bottom: 1rem;
+            box-shadow: 0 1px 3px rgba(27, 36, 52, 0.06);
         }
         .ac-step-title {
-            font-size: 1.05rem; font-weight: 700; color: #f8fafc;
+            font-size: 1.05rem; font-weight: 700; color: #1B2434;
             margin-bottom: 0.4rem;
         }
         .ac-step-desc {
-            font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.8rem;
+            font-size: 0.85rem; color: #5B6579; margin-bottom: 0.8rem;
         }
         .ac-status-ok    { color: #22c55e; font-weight: 600; }
         .ac-status-miss  { color: #f59e0b; font-weight: 600; }

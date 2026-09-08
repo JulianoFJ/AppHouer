@@ -52,6 +52,6 @@ echo   (Nao feche esta janela enquanto estiver usando o App)
 echo ----------------------------------------------------------
 echo.
 
-py -m streamlit run app.py --server.port 8501 --theme.base "dark"
+py -m streamlit run app.py --server.port 8501 --theme.base "light"
 
 pause

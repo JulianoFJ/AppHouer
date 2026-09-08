@@ -39,21 +39,21 @@ st.markdown("""
     :root {
         --marca-navy: #1B3664;
         --marca-teal: #00A9E0;
-        --bg-dark: #0b111e;
-        --card-bg: #12192b;
-        --card-border: #1f2937;
+        --bg-claro: #F4F6FA;
+        --card-bg: #FFFFFF;
+        --card-border: #E2E8F0;
     }
-    
+
     .stApp {
-        background: radial-gradient(circle at 0% 0%, #1B366433, transparent), 
-                    radial-gradient(circle at 100% 100%, #00A9E011, transparent),
-                    #0b111e;
+        background: radial-gradient(circle at 0% 0%, #1B36640D, transparent),
+                    radial-gradient(circle at 100% 100%, #00A9E00D, transparent),
+                    #F4F6FA;
     }
-    
+
     .hero-title {
         font-size: 3.2rem;
         font-weight: 800;
-        background: linear-gradient(90deg, #ffffff, var(--marca-teal));
+        background: linear-gradient(90deg, var(--marca-navy), var(--marca-teal));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin-bottom: 0rem;
@@ -61,38 +61,38 @@ st.markdown("""
     }
     .hero-sub {
         font-size: 1.1rem;
-        color: #94a3b8;
+        color: #5B6579;
         margin-bottom: 2rem;
         font-weight: 400;
     }
-    
+
     .forn-card {
-        background: rgba(18, 25, 43, 0.6);
-        backdrop-filter: blur(10px);
+        background: var(--card-bg);
         border: 1px solid var(--card-border);
         border-top: 4px solid var(--marca-teal);
         border-radius: 20px;
         padding: 1.8rem;
+        box-shadow: 0 1px 3px rgba(27, 36, 52, 0.06);
         transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     }
     .forn-card:hover {
         transform: translateY(-8px);
         border-color: var(--marca-teal);
-        background: rgba(27, 54, 100, 0.2);
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        background: #F0F7FC;
+        box-shadow: 0 20px 40px rgba(27, 36, 52, 0.12);
     }
     .forn-name {
         font-size: 1.1rem;
         font-weight: 700;
-        color: #f8fafc;
+        color: #1B2434;
         letter-spacing: 0.05em;
         text-transform: uppercase;
         margin-bottom: 1.2rem;
     }
-    
+
     .metric-label {
         font-size: 0.85rem;
-        color: #94a3b8;
+        color: #5B6579;
         margin-top: 1rem;
         display: flex;
         justify-content: space-between;
@@ -101,18 +101,18 @@ st.markdown("""
     .metric-value {
         font-size: 2rem;
         font-weight: 800;
-        color: #ffffff; /* Valor sempre branco para destaque */
+        color: #1B2434; /* Valor sempre no texto mais forte, para destaque */
     }
     .metric-unit {
         font-size: 0.9rem;
         font-weight: 400;
         color: #64748b;
     }
-    
-    .section-title { 
-        font-size: 1.5rem; 
-        font-weight: 700; 
-        color: #f8fafc; 
+
+    .section-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #1B2434;
         margin: 3rem 0 1.5rem;
         display: flex;
         align-items: center;
@@ -128,8 +128,8 @@ st.markdown("""
     }
 
     div[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, var(--marca-navy), #0b111e);
-        border-right: 1px solid #1f2937;
+        background: var(--card-bg);
+        border-right: 1px solid var(--card-border);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -532,10 +532,10 @@ st.markdown(
     """
     <div style="margin: 0.4rem 0 0.2rem 0;">
       <div style="font-size:2.6rem; font-weight:800; line-height:1.15;
-                  background: linear-gradient(90deg,#ffffff,#00A9E0);
+                  background: linear-gradient(90deg,#1B3664,#00A9E0);
                   -webkit-background-clip:text; -webkit-text-fill-color:transparent;
                   letter-spacing:-1px;">Simulação NBR 5101</div>
-      <div style="font-size:1.02rem; color:#94a3b8; margin-top:0.35rem;">
+      <div style="font-size:1.02rem; color:#5B6579; margin-top:0.35rem;">
         Dimensionamento luminotécnico assistido por aprendizado de máquina
       </div>
     </div>
@@ -1307,11 +1307,11 @@ with tab_individual:
             msg = f"O modelo ML confirma o braço atual **{braco_novo}** ({proj_atual_str}) como adequado para esta geometria."
         conf_str = f"{braco_ml_prob*100:.0f}%" if braco_ml_prob is not None else "—"
         st.markdown(
-            f'<div style="background:rgba(18,25,43,0.7); border:1px solid #1f2937; border-left:4px solid {cor_badge}; '
+            f'<div style="background:#FFFFFF; border:1px solid #E2E8F0; border-left:4px solid {cor_badge}; '
             f'border-radius:12px; padding:14px 18px; margin:12px 0;">'
             f'<span style="font-size:0.8rem; font-weight:700; color:{cor_badge}; text-transform:uppercase; letter-spacing:.05em;">'
             f'{icone} Braço — Recomendação ML</span>'
-            f'<div style="font-size:0.9rem; color:#e2e8f0; margin-top:6px;">{msg}</div>'
+            f'<div style="font-size:0.9rem; color:#1B2434; margin-top:6px;">{msg}</div>'
             f'<div style="font-size:0.75rem; color:#64748b; margin-top:4px;">Confiança do modelo: {conf_str}</div>'
             f'</div>',
             unsafe_allow_html=True
@@ -1418,7 +1418,7 @@ with tab_individual:
             with cpe_cols[i]:
                 cpe_html = f'<div class="forn-card" style="border-top-color:#f59e0b;">'
                 cpe_html += f'<div class="forn-name" style="color:#f59e0b;">CPE — {forn}</div>'
-                cpe_html += f'<div style="font-size:0.75rem;color:#94a3b8;margin-bottom:10px;">Distância: {dist_postes:.0f}m → <b style="color:#f59e0b;">{dist_cpe:.0f}m</b></div>'
+                cpe_html += f'<div style="font-size:0.75rem;color:#5B6579;margin-bottom:10px;">Distância: {dist_postes:.0f}m → <b style="color:#f59e0b;">{dist_cpe:.0f}m</b></div>'
 
                 for m in metricas_ativas:
                     val_orig = resultados[m].get(forn)
@@ -1471,14 +1471,14 @@ with tab_individual:
             with custo_cols[i]:
                 if custo is not None:
                     delta_str = f"+{pot_real - pot_prev:.0f}W" if pot_real > pot_prev else f"{pot_real - pot_prev:.0f}W"
-                    c_html = f'<div style="background:rgba(27,54,100,0.4); backdrop-filter:blur(10px); border-radius:20px; padding:1.5rem; text-align:center; border:1px solid #2d4060; border-top:4px solid {cor}; height:100%;">'
-                    c_html += f'<div style="font-size:.75rem; color:#94a3b8; text-transform:uppercase; letter-spacing:.1em; margin-bottom:1rem;">{forn}</div>'
-                    c_html += f'<div style="font-size:.85rem; color:#f8fafc; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{lum_nome}">{lum_nome}</div>'
-                    c_html += f'<div style="font-size:.9rem; color:#94a3b8; margin-bottom:1rem;">{pot_real:.0f}W <span style="font-size:.7rem; color:#64748b;">({delta_str})</span></div>'
-                    c_html += f'<div style="font-size:2.2rem; font-weight:800; color:white;">R$ {custo:,.2f}</div></div>'
+                    c_html = f'<div style="background:#FFFFFF; border-radius:20px; padding:1.5rem; text-align:center; border:1px solid #E2E8F0; border-top:4px solid {cor}; height:100%; box-shadow: 0 1px 3px rgba(27, 36, 52, 0.06);">'
+                    c_html += f'<div style="font-size:.75rem; color:#5B6579; text-transform:uppercase; letter-spacing:.1em; margin-bottom:1rem;">{forn}</div>'
+                    c_html += f'<div style="font-size:.85rem; color:#1B2434; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{lum_nome}">{lum_nome}</div>'
+                    c_html += f'<div style="font-size:.9rem; color:#5B6579; margin-bottom:1rem;">{pot_real:.0f}W <span style="font-size:.7rem; color:#64748b;">({delta_str})</span></div>'
+                    c_html += f'<div style="font-size:2.2rem; font-weight:800; color:#1B2434;">R$ {custo:,.2f}</div></div>'
                     st.markdown(c_html, unsafe_allow_html=True)
                 else:
-                    st.markdown(f'<div style="font-size:.75rem; color:#94a3b8; text-transform:uppercase;">{forn}</div><div style="font-size:1.1rem; color:#64748b; margin-top:1rem;">Sem dados no banco</div></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.75rem; color:#5B6579; text-transform:uppercase;">{forn}</div><div style="font-size:1.1rem; color:#64748b; margin-top:1rem;">Sem dados no banco</div></div>', unsafe_allow_html=True)
 
     # ── Seção de Sugestões (Compliance Assistant)
     if sugestoes_por_forn:
@@ -1492,7 +1492,7 @@ with tab_individual:
                     st.markdown(f"""
                     <div style="background:rgba(255, 215, 0, 0.05); border-left:4px solid {cor}; border-radius:10px; padding:15px; height:100%;">
                         <div style="font-size:0.8rem; font-weight:700; color:{cor}; margin-bottom:8px;">{forn} - RECOMENDAÇÕES:</div>
-                        {"".join([f'<div style="font-size:0.85rem; color:#f8fafc; margin-bottom:5px;">{s}</div>' for s in sugs])}
+                        {"".join([f'<div style="font-size:0.85rem; color:#1B2434; margin-bottom:5px;">{s}</div>' for s in sugs])}
                     </div>
                     """, unsafe_allow_html=True)
                 else:
@@ -1517,8 +1517,8 @@ with tab_individual:
             font=dict(color='#d1d5db', family='Inter'),
             showlegend=False, bargap=0.35, height=360,
             margin=dict(t=30, b=10),
-            yaxis=dict(title=titulo, gridcolor='#1f2937', zerolinecolor='#374151'),
-            xaxis=dict(gridcolor='#1f2937'),
+            yaxis=dict(title=titulo, gridcolor='#E2E8F0', zerolinecolor='#CBD5E1'),
+            xaxis=dict(gridcolor='#E2E8F0'),
         )
         return fig
 

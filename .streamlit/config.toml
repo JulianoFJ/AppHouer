@@ -1,36 +1,41 @@
 # Tema da Plataforma IP.
 #
-# Por que este arquivo existe: localmente o app é iniciado com
-# `--theme.base "dark"` (ver iniciar_app.bat), mas o Streamlit Cloud não recebe
-# argumentos de CLI. Sem esta configuração, o app publicado renderiza os componentes
-# no tema claro enquanto o CSS de app.py continua pintando o fundo de escuro — o
-# resultado é um híbrido com texto claro sobre campo branco. As cores abaixo são as
-# mesmas que app.py já injeta, então isto apenas replica no deploy o comportamento
-# que já existe localmente.
+# Por que este arquivo existe: localmente o app é iniciado com `--theme.base` via
+# `iniciar_app.bat`, mas o Streamlit Cloud não recebe argumentos de CLI. Sem esta
+# configuração, o app publicado renderiza os componentes num tema enquanto o CSS de
+# app.py pinta o fundo de outro — o resultado é um híbrido ilegível. As cores abaixo
+# são as mesmas que app.py já injeta, então isto apenas replica no deploy o
+# comportamento que já existe localmente.
+#
+# Paleta clara adotada em 08/09/2026, a pedido — decisão de marca, não default do
+# Streamlit. Fundo/superfícies vieram de #0b111e/#12192b (quase-preto) para
+# #F4F6FA/#FFFFFF; texto de #f8fafc para #1B2434. Teal (`primaryColor`) e o navy de
+# marca (usado pontualmente no CSS de app.py) não mudaram — são a identidade, o que
+# mudou foi só a hierarquia de superfície ao redor deles.
 
 [theme]
-base = "dark"
-backgroundColor = "#0b111e"
-textColor = "#f8fafc"
+base = "light"
+backgroundColor = "#F4F6FA"
+textColor = "#1B2434"
 
 # Superfície dos campos editáveis (o Streamlit usa `secondaryBackgroundColor` como
-# preenchimento de input, select, textarea e number_input). Era #12192b, a dois passos
-# do fundo #0b111e: sem borda e sem contraste, campo digitável ficava indistinguível
-# de texto estático — o usuário não percebia que dava para editar. Subir a superfície
-# e ligar a borda foi o que separou "campo" de "fundo".
-secondaryBackgroundColor = "#182238"
+# preenchimento de input, select, textarea e number_input, e também pinta a sidebar e
+# containers como `st.expander`). Branco puro, para destacar do cinza-azulado do fundo
+# só pela borda — mesma lógica de contraste do tema escuro anterior, invertida.
+secondaryBackgroundColor = "#FFFFFF"
 
 # `showWidgetBorder` desenha o contorno em todo widget de entrada da plataforma, o que
 # antes era remendado caso a caso (a tela de login tinha o próprio CSS só para isso).
 showWidgetBorder = true
-borderColor = "#2f3f5c"
+borderColor = "#CBD5E1"
 
-# `primaryColor` era omitido de propósito para não mexer nos controles das ferramentas
-# existentes — mas o efeito colateral era o vermelho padrão do Streamlit em botão
-# primário, slider e checkbox, que não é cor da plataforma. Passa a ser o teal da
-# identidade, e a exceção local do formulário de login deixa de ser necessária.
+# `primaryColor` é o teal da identidade — mantido do tema escuro, não é ajustável aqui.
 primaryColor = "#00A9E0"
-linkColor = "#4FC3F0"
+# `linkColor` NÃO é o mesmo teal do botão: teal #00A9E0 como texto puro sobre fundo
+# claro fica abaixo do contraste mínimo de leitura (funciona em botão preenchido com
+# texto branco, que é outra conta de contraste). Versão escurecida do mesmo tom, ainda
+# reconhecível como "a cor da marca", mas legível como texto corrido.
+linkColor = "#0B84AE"
 
 baseRadius = "0.6rem"
 buttonRadius = "0.5rem"

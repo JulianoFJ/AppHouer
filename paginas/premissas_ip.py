@@ -26,15 +26,16 @@ st.markdown(
     """
     <style>
         .pip-hero-title { font-size: 2.6rem; font-weight: 800;
-            background: linear-gradient(90deg, #ffffff, #00A9E0);
+            background: linear-gradient(90deg, #1B3664, #00A9E0);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             letter-spacing: -1px; margin-bottom: 0.2rem; }
-        .pip-hero-sub { font-size: 1rem; color: #94a3b8; margin-bottom: 1.2rem; }
-        .pip-step { background: rgba(18,25,43,0.6); border: 1px solid #1f2937;
+        .pip-hero-sub { font-size: 1rem; color: #5B6579; margin-bottom: 1.2rem; }
+        .pip-step { background: #FFFFFF; border: 1px solid #E2E8F0;
             border-left: 4px solid #00A9E0; border-radius: 12px;
-            padding: 1rem 1.2rem; margin-bottom: 1rem; }
-        .pip-step-title { font-size: 1.05rem; font-weight: 700; color: #f8fafc; }
-        .pip-grp { color: #00A9E0; font-weight: 700; font-size: 0.95rem;
+            padding: 1rem 1.2rem; margin-bottom: 1rem;
+            box-shadow: 0 1px 3px rgba(27, 36, 52, 0.06); }
+        .pip-step-title { font-size: 1.05rem; font-weight: 700; color: #1B2434; }
+        .pip-grp { color: #0B84AE; font-weight: 700; font-size: 0.95rem;
             margin: 0.6rem 0 0.2rem 0; }
         .pip-fonte { color: #64748b; font-size: 0.72rem; font-style: italic; }
     </style>
@@ -207,7 +208,7 @@ def _render_secao_dinamica(sec: schema.Secao, resp: coleta.Respostas) -> None:
 # ── Passo 0: Importar DTO (opcional) ──────────────────────────────────────────
 st.markdown(
     '<div class="pip-step"><div class="pip-step-title">Passo 0 — Importar fontes (opcional)</div>'
-    '<div style="color:#94a3b8;font-size:.85rem">Envie o <b>DTO</b> (.docx) e/ou as planilhas de '
+    '<div style="color:#5B6579;font-size:.85rem">Envie o <b>DTO</b> (.docx) e/ou as planilhas de '
     '<b>Extrapolação</b>, <b>Proposição de IAE</b> e <b>InvBens/ID</b> para auto-preencher: parque, '
     'LED, expansão, demanda reprimida, vida útil, distribuição por classe viária, custo de estrutura '
     'e a lista de Iluminação Especial. Tudo permanece editável.</div></div>',
