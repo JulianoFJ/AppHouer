@@ -52,7 +52,7 @@ import requests
 from sklearn.neighbors import BallTree
 
 from . import caminhos
-from .classe_nbr import ClasseEstimada, e_pedonal, estimar_classe_m
+from .classe_nbr import ClasseEstimada, classificar_via, e_pedonal
 
 RAIO_TERRA_M = 6_371_000.0
 
@@ -246,7 +246,7 @@ def casar(df: pd.DataFrame, malha: MalhaViaria,
         `logradouro`            nome OSM da via mais próxima ("" quando a via não tem
                                 nome ou o casamento ficou além de DISTANCIA_MAXIMA_M)
         `hierarquia_osm`        motorway/trunk/primary/… da via casada
-        `classe_via`            classe M da NBR 5101:2024 estimada (ver `classe_nbr`)
+        `classe_via`            classe M ou C da NBR 5101:2024 estimada (`classe_nbr`)
         `dist_via_m`            distância ao eixo, para conferência e descarte
         `metodo_classe`         como a classe foi obtida, para o relatório
 
@@ -293,14 +293,15 @@ def casar(df: pd.DataFrame, malha: MalhaViaria,
 
         chave = (int(indice_via), urbano[k])
         if chave not in cache:
-            cache[chave] = estimar_classe_m(
+            cache[chave] = classificar_via(
                 tags,
                 area_urbana=urbano[k],
                 intersecoes_por_km=malha.intersecoes_por_km[indice_via],
             )
         estimada = cache[chave]
         classes.append(estimada.classe)
-        origens.append(f"NBR 5101:2024 Tabela 1 (V_PS = {estimada.soma_ponderacao:+.1f})")
+        tabela = "Tabela 1 (M)" if estimada.classe.startswith("M") else "Tabela 3 (C)"
+        origens.append(f"NBR 5101:2024 {tabela} (V_PS = {estimada.soma_ponderacao:+.1f})")
 
     resultado.loc[tem_coord, "logradouro"] = logradouros
     resultado.loc[tem_coord, "hierarquia_osm"] = hierarquias
