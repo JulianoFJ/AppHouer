@@ -612,8 +612,10 @@ elif st.button("🔎 Identificar áreas especiais (OpenStreetMap)", key="am_busc
         st.session_state["am_areas_fingerprint"] = _fingerprint_base
     except Exception as exc:
         st.warning(
-            f"Não foi possível consultar o OpenStreetMap agora: {exc} "
-            "Esta etapa é opcional — a amostragem segue normalmente sem ela."
+            f"Não foi possível consultar o OpenStreetMap agora ({exc}). "
+            "É o serviço público (Overpass) sobrecarregado, não um problema do cadastro "
+            "— costuma responder numa nova tentativa. Esta etapa é opcional: a "
+            "amostragem segue normalmente sem ela."
         )
 
 _areas_validas = (

@@ -233,25 +233,41 @@ def extrair_pip(base: BaseBDGD, destino: Optional[Path] = None,
 
 
 # ── classificação tecnológica ────────────────────────────────────────────────
-# A BDGD não traz o domínio de TIPO_LAMP embutido, e o código varia entre
-# distribuidoras. Em vez de fixar uma tabela, o rótulo é INFERIDO da assinatura física
-# de cada código, o que funciona em qualquer base e é auditável:
-#
-#   perda de reator ≈ 0            -> LED (driver integrado, sem reator declarado)
-#   potências 80/125/250/400 W     -> vapor de mercúrio (série normalizada da tecnologia)
-#   potências 70/100/150/250/400 W -> vapor de sódio
-#   perda baixa, série mista       -> vapor metálico
-#
-# A tabela inferida é gravada junto com as evidências (n, potência modal, perda média)
-# para conferência contra o dicionário da distribuidora.
+# Código oficial da ANEEL para o campo TIPO_LAMP da entidade PIP — Módulo 10 do
+# PRODIST, Anexo I (Dicionário de Dados), conferido em 08/09/2026 contra o manual
+# "Módulo_10-Revisão_02.pdf". Até essa data o time tratava o domínio como não confiável
+# ("varia por distribuidora, não vem na BDGD") e inferia tudo pela assinatura física —
+# mas o código bate perfeitamente com essa mesma assinatura na Cemig-D V11/2025 (perda
+# de reator: ~17 W nos 316.689 pontos do código 9 "Vapor de Sódio", ~5 W nos 6.605 do
+# código 7 "Multivapores metálicos", 0 W nos 1.924.590 do código 1 "LED" — os mesmos
+# limiares já calibrados abaixo). O código oficial vira a fonte primária: mais direto e
+# cobre 10 categorias contra as 4 que a heurística sozinha reconhecia. Achado concreto
+# da checagem: ~795 pontos de tecnologias sem reator magnético mas que NÃO são LED
+# (Mista, Fluorescente compacta, Halógena, Incandescente, Outros) caíam classificados
+# como LED pela heurística antiga, porque ela só olhava a perda do reator.
+CODIGOS_TIPO_LAMP = {
+    "1": "LED",
+    "2": "Fluorescente de indução magnética",
+    "3": "Fluorescente compacta",
+    "4": "Halógena",
+    "5": "Incandescente",
+    "6": "Mista",
+    "7": "Vapor metálico",
+    "8": "Vapor de mercúrio",
+    "9": "Vapor de sódio",
+    "10": "Outros",
+}
 
+# Heurística por assinatura física — mantida só como rede de segurança para código
+# vazio, "0" (convenção da ANEEL para "não informado" nas demais tabelas de domínio) ou
+# fora da tabela oficial acima. Existia sozinha até 08/09/2026; ver comentário acima.
 SERIE_MERCURIO = {80.0, 125.0}       # série normalizada exclusiva do vapor de mercúrio
 SERIE_SODIO = {70.0, 100.0, 150.0}   # compartilhada com o vapor metálico
 LIMITE_PERDA_LED = 1.0               # W — abaixo disso não há reator eletromagnético
 LIMITE_PERDA_METALICO = 10.0         # W — reator de multivapor perde bem menos que o de VS
 
 
-def _rotular_codigo(perda_reat: float, potencias_dominantes: set) -> str:
+def _rotular_por_assinatura_fisica(perda_reat: float, potencias_dominantes: set) -> str:
     # A ordem importa: 70/100/150 W servem tanto a sódio quanto a metálico, e o que
     # separa os dois é a perda do reator (~17 W no sódio, ~5 W no multivapor).
     if perda_reat < LIMITE_PERDA_LED:
@@ -263,6 +279,16 @@ def _rotular_codigo(perda_reat: float, potencias_dominantes: set) -> str:
     if potencias_dominantes & SERIE_SODIO:
         return "Vapor de sódio"
     return "Descarga (não identificada)"
+
+
+def _rotular_codigo(codigo_txt: str, perda_reat: float, potencias_dominantes: set) -> str:
+    """Decodifica pelo código oficial da ANEEL; heurística física só para o que sobra."""
+    if not codigo_txt or codigo_txt == "0":
+        return "Não informado"
+    oficial = CODIGOS_TIPO_LAMP.get(codigo_txt)
+    if oficial:
+        return oficial
+    return _rotular_por_assinatura_fisica(perda_reat, potencias_dominantes)
 
 
 def inferir_tecnologias(df: pd.DataFrame) -> pd.DataFrame:
@@ -280,10 +306,7 @@ def inferir_tecnologias(df: pd.DataFrame) -> pd.DataFrame:
         modas = g["POT_LAMP"].mode()
         linhas.append({
             "tipo_lamp": codigo_txt,
-            # código em branco não é evidência de nada: perda zero aqui significa
-            # campo não preenchido, não driver eletrônico.
-            "tecnologia": "Não informado" if not codigo_txt
-                          else _rotular_codigo(perda, modais),
+            "tecnologia": _rotular_codigo(codigo_txt, perda, modais),
             "pontos": int(len(g)),
             "pot_modal_w": float(modas.iloc[0]) if not modas.empty else None,
             "pot_mediana_w": float(g["POT_LAMP"].median()),

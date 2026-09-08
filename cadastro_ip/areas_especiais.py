@@ -109,9 +109,15 @@ def _consultar_overpass(bbox: tuple[float, float, float, float],
 
     consulta = _consulta(bbox)
     erro_final: Optional[Exception] = None
-    for tentativa, url in enumerate(OVERPASS_ESPELHOS):
+    # 3 rodadas pelos dois espelhos (6 tentativas), com espera crescente: o Overpass
+    # público devolve 504 sob carga com frequência — testado ao vivo em 08/09/2026, só
+    # respondeu na terceira rodada com essa mesma cadência. Uma tentativa por espelho,
+    # como era antes, falhava rápido demais para um serviço de cortesia que às vezes só
+    # precisa de mais alguns segundos de fôlego.
+    rodadas = [(url, 15.0 * (r + 1)) for r in range(3) for url in OVERPASS_ESPELHOS]
+    for tentativa, (url, espera) in enumerate(rodadas):
         try:
-            resposta = requests.post(url, data={"data": consulta}, timeout=120,
+            resposta = requests.post(url, data={"data": consulta}, timeout=100,
                                      headers={"User-Agent": USER_AGENT})
             resposta.raise_for_status()
             elementos = resposta.json().get("elements", [])
@@ -120,12 +126,12 @@ def _consultar_overpass(bbox: tuple[float, float, float, float],
             return elementos
         except Exception as exc:                      # noqa: BLE001
             erro_final = exc
-            if tentativa < len(OVERPASS_ESPELHOS) - 1:
-                time.sleep(2.0)
-    raise RuntimeError(
-        f"Não foi possível consultar o OpenStreetMap: {erro_final}. "
-        "A identificação de áreas especiais é opcional — a amostragem segue sem ela."
-    )
+            if tentativa < len(rodadas) - 1:
+                time.sleep(espera)
+    # Mensagem técnica e só isso: quem chama (a página) é quem decide o tom de "está
+    # tudo bem, é opcional" — duplicar essa frase aqui e na página produzia um aviso
+    # repetido ("não foi possível... não foi possível... é opcional... é opcional...").
+    raise RuntimeError(str(erro_final))
 
 
 # ── Geometria ────────────────────────────────────────────────────────────────

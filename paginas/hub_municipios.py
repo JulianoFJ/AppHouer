@@ -48,8 +48,27 @@ ORDEM_VIABILIDADE = [
 COR_TECNOLOGIA = {
     "LED": "#1F9ED1", "Vapor de sódio": "#C08420",
     "Vapor de mercúrio": "#8B5CF6", "Vapor metálico": "#17A672",
+    "Outras tecnologias": "#94A3B8",
 }
 COR_AUSENTE = "#64748B"
+
+# `hub_municipios.bdgd.inferir_tecnologias` decodifica TIPO_LAMP por código oficial da
+# ANEEL desde 08/09/2026 e passou a reconhecer 10 categorias (antes eram 4). O gráfico
+# por município continua mostrando só as quatro que de fato dominam o parque — as
+# outras seis (Fluorescente de indução magnética, Fluorescente compacta, Halógena,
+# Incandescente, Mista, Outros) são tecnologia obsoleta ou residual, e mostrá-las
+# separadas encheria a barra de fatias de meia dúzia de pontos cada. Dobram para
+# "Outras tecnologias" só na visualização — o parquet exportável guarda a categoria
+# granular, para quem quiser abrir o detalhe.
+TECNOLOGIAS_PRINCIPAIS = set(COR_TECNOLOGIA) - {"Outras tecnologias"}
+
+
+def _agrupar_tecnologias_para_grafico(tm: pd.DataFrame) -> pd.DataFrame:
+    agrupado = tm.copy()
+    agrupado["tecnologia"] = agrupado["tecnologia"].where(
+        agrupado["tecnologia"].isin(TECNOLOGIAS_PRINCIPAIS), "Outras tecnologias")
+    return (agrupado.groupby("tecnologia", as_index=False)
+            .agg(pontos=("pontos", "sum")))
 ESCALA_MAGNITUDE = ["#0E2A3A", "#186F96", "#1F9ED1", "#7FCDEA"]
 
 # Hierarquia de texto de gráfico invertida para fundo claro: primária escura -> fraca
@@ -600,6 +619,7 @@ with aba_municipio, _aba_isolada("Município"):
                 tec = _tecnologia()
                 tm = tec[tec["codigo_municipio"] == escolhido] if not tec.empty else pd.DataFrame()
                 tm = tm[tm["tecnologia"] != "Não informado"] if not tm.empty else tm
+                tm = _agrupar_tecnologias_para_grafico(tm) if not tm.empty else tm
                 if tm.empty:
                     st.info("Sem mix tecnológico para este município — a BDGD da "
                             "distribuidora não traz os campos de lâmpada, ou o parque "

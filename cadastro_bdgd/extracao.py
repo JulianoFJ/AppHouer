@@ -231,6 +231,17 @@ def _montar(pip: pd.DataFrame, ponnot: pd.DataFrame, base: bdgd.BaseBDGD,
     for eixo in ("latitude", "longitude"):
         cadastro[eixo] = pd.to_numeric(cadastro[eixo], errors="coerce")
 
+    # Só pontos ativos: 'DS' é desativado (luminária que não existe mais fisicamente) e
+    # não deveria entrar na população amostrável da NBR 5426 — mandar equipe a campo
+    # medir um ponto que não existe é desperdício de amostra. Mesma regra que
+    # `hub_municipios.bdgd.agregar` já aplica no agregado do Hub; achado em 08/09/2026
+    # que faltava aqui: 6.755 de 2.398.235 pontos (0,28%) na Cemig-D V11/2025 estavam
+    # marcados DS e ainda contavam no parque publicado para a Amostragem.
+    pontos_desativados = 0
+    if "SIT_ATIV" in cadastro.columns:
+        pontos_desativados = int((cadastro["SIT_ATIV"] == "DS").sum())
+        cadastro = cadastro[cadastro["SIT_ATIV"] != "DS"].copy()
+
     for numerica in ("CAR_INST", "POT_LAMP", "PERDA_REAT", "PERDA_RELE"):
         if numerica in cadastro.columns:
             cadastro[numerica] = pd.to_numeric(cadastro[numerica], errors="coerce")
@@ -271,6 +282,7 @@ def _montar(pip: pd.DataFrame, ponnot: pd.DataFrame, base: bdgd.BaseBDGD,
     cadastro["distribuidora"] = base.distribuidora
     cadastro["data_base_bdgd"] = base.data_base
     cadastro["versao_bdgd"] = base.versao
+    cadastro.attrs["pontos_desativados"] = pontos_desativados
     return cadastro
 
 
@@ -436,16 +448,21 @@ def extrair_base_inteira(base: bdgd.BaseBDGD, publicar: bool = False,
     vazio = ponnot.iloc[0:0]
 
     gravados: dict[str, int] = {}
+    total_desativados = 0
     for codigo, fatia in pip.groupby("MUN", sort=False):
         codigo = str(codigo).strip()
         if not codigo or codigo.lower() in ("nan", "none"):
             continue
         cadastro = _montar(fatia, grupos_ponnot.get(codigo, vazio), base, codigo)
+        total_desativados += cadastro.attrs.get("pontos_desativados", 0)
         salvar(cadastro, codigo, publicar=publicar)
         gravados[codigo] = len(cadastro)
         if len(gravados) % 100 == 0:
             log(f"  … {len(gravados)} municípios gravados")
     log(f"{len(gravados):,} municípios gravados".replace(",", "."))
+    if total_desativados:
+        log(f"{total_desativados:,} ponto(s) com SIT_ATIV=DS excluído(s) do parque "
+            "amostrável (desativados)".replace(",", "."))
     return gravados
 
 
@@ -566,6 +583,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"  OK {len(cadastro):,} pontos · {com_coord:,} com coordenada "
                   f"({com_coord / len(cadastro):.0%}) · {time.time() - t0:,.0f} s"
                   .replace(",", "."))
+            desativados = cadastro.attrs.get("pontos_desativados", 0)
+            if desativados:
+                print(f"  {desativados:,} ponto(s) SIT_ATIV=DS excluído(s) do parque "
+                      "amostrável".replace(",", "."))
             print(f"  -> {caminho}")
         except Exception as exc:                        # noqa: BLE001
             falhas += 1
