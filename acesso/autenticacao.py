@@ -18,31 +18,27 @@ dependências do deploy, menos chance de quebrar o carregamento dos modelos.
 ~0,3 s por login nesta máquina, o que é irrelevante para o usuário e caro para quem
 tenta força bruta.
 
-**Os usuários vivem na tabela `users` do Postgres, nunca no repositório.** Até a
-migração para hospedagem própria (Railway), viviam em `st.secrets` — mas um secrets
-só existe por instância/redeploy, e o Community Cloud não oferecia banco nenhum.
-Com um Postgres real disponível, a tabela substitui o bloco `[auth.usuarios]` inteiro;
-cadastro/revogação de acesso passam a ser um INSERT/UPDATE, não uma edição de TOML
-seguida de redeploy. `senha_hash` guarda exatamente o mesmo formato de antes.
+**Os hashes vivem em `st.secrets`, nunca no repositório.** No Streamlit Cloud isso é
+o painel de secrets; localmente é `.streamlit/secrets.toml`, que está no `.gitignore`.
+Isso importa mais aqui do que no caso geral, porque o repositório é público.
 
 **Mensagem de erro genérica.** "Usuário ou senha inválidos" não revela se o usuário
 existe. E a verificação roda mesmo para usuário inexistente, contra um hash falso, para
 que o tempo de resposta não denuncie a existência da conta (ataque por temporização).
 
-Configuração restante em `st.secrets`
---------------------------------------
-Só os parâmetros de sessão continuam em secrets — não são segredo, mas não há hoje
-outro lugar de configuração no portal:
-
+Formato esperado em `st.secrets`
+--------------------------------
     [auth]
     expiracao_horas = 12          # opcional (padrão 12); sessão inativa expira
     max_tentativas  = 5           # opcional (padrão 5); bloqueio temporário
     bloqueio_minutos = 15         # opcional (padrão 15)
 
-Cadastre um usuário com:  py -m acesso.gerar_hash --login jferreira --nome "Juliano Ferreira"
-Grava direto na tabela `users` (requer `DATABASE_URL` no ambiente); rodar de novo para
-um login existente atualiza nome/perfil/senha, então também serve para troca de senha.
-Cadastro pela interface (perfil admin) vive em `paginas/administracao.py`.
+    [auth.usuarios.jferreira]
+    nome  = "Juliano Ferreira"
+    senha_hash = "pbkdf2_sha256$600000$<salt>$<hash>"
+    perfil = "admin"              # opcional; livre, hoje só informativo
+
+Gere o hash com:  py -m acesso.gerar_hash
 """
 
 from __future__ import annotations
@@ -57,9 +53,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import streamlit as st
-from sqlalchemy import text
-
-import db
 
 ALGORITMO = "pbkdf2_sha256"
 ITERACOES = 600_000
@@ -153,19 +146,9 @@ def _cfg() -> dict:
 
 
 def _usuarios() -> dict:
-    """Usuários ativos, por login. Consulta o Postgres a cada chamada: só é exercida
-    na tela de login (não autenticado), então o volume é baixo e não justifica cache —
-    cache aqui só atrasaria a revogação de um acesso."""
     try:
-        with db.engine().connect() as conexao:
-            linhas = conexao.execute(text(
-                "select login, nome, senha_hash, perfil from users where ativo"
-            )).mappings().all()
-        return {linha["login"]: dict(linha) for linha in linhas}
+        return dict(st.secrets["auth"]["usuarios"])
     except Exception:
-        # Falha de conexão não pode virar stack trace para o usuário final — vira
-        # "controle de acesso não configurado", que é o mesmo caminho de falha fechada
-        # que já existia para secrets ausente.
         return {}
 
 
