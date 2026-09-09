@@ -18,28 +18,15 @@ reexecuta o script a cada interação — às vezes com minutos de silêncio ent
 e outra —, uma conexão do pool pode estar morta na próxima vez que for usada.
 `pool_pre_ping=True` testa a conexão antes de entregá-la, trocando por uma nova
 quando necessário, ao custo de um round-trip extra por checkout.
-
-Por que não `st.cache_resource`
----------------------------------
-Este módulo também é importado por `migrations/env.py` (Alembic) e por scripts de
-linha de comando como `acesso/gerar_hash.py`, nenhum dos quais roda dentro de um
-processo Streamlit — importar `streamlit` aqui só para decorar `engine()` obrigaria
-até uma migration de schema a instalar o framework web inteiro. Um singleton comum de
-módulo já resolve o problema que `cache_resource` resolveria: o dicionário de módulos
-do Python (`sys.modules`) persiste entre reruns do mesmo processo, então uma variável
-de nível de módulo já é, na prática, por-processo — exatamente o escopo desejado.
 """
 
 from __future__ import annotations
 
 import os
-import threading
 
+import streamlit as st
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-
-_engine: Engine | None = None
-_trava = threading.Lock()
 
 
 def url() -> str:
@@ -60,11 +47,7 @@ def url() -> str:
     return valor
 
 
+@st.cache_resource
 def engine() -> Engine:
     """Engine única do processo, com pool de conexões compartilhado entre os módulos."""
-    global _engine
-    if _engine is None:
-        with _trava:
-            if _engine is None:
-                _engine = create_engine(url(), pool_pre_ping=True)
-    return _engine
+    return create_engine(url(), pool_pre_ping=True)
