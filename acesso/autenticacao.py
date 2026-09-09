@@ -268,11 +268,14 @@ def exigir_login() -> Usuario:
 def _tela_nao_configurado() -> None:
     st.error("Controle de acesso não configurado.")
     st.markdown(
-        "Nenhum usuário foi cadastrado em `st.secrets`, e por segurança o portal não "
-        "abre sem controle de acesso.\n\n"
-        "**Para configurar:** gere um hash com `py -m acesso.gerar_hash` e cole o bloco "
-        "resultante em `.streamlit/secrets.toml` (local) ou no painel de secrets do "
-        "Streamlit Cloud (publicado). Ver `app/acesso/README.md`."
+        "Nenhum usuário ativo foi encontrado na tabela `users`, e por segurança o "
+        "portal não abre sem controle de acesso. Isso acontece tanto quando não há "
+        "nenhum usuário cadastrado quanto quando o app não conseguiu consultar o "
+        "Postgres (`DATABASE_URL` ausente ou inválida nesta instância).\n\n"
+        "**Para configurar:** cadastre um usuário com `py -m acesso.gerar_hash "
+        "--login <login> --nome \"<nome>\" --perfil admin` (requer `DATABASE_URL` no "
+        "ambiente de onde o comando roda) ou confira se `DATABASE_URL` está definida "
+        "nas variáveis deste serviço no Railway."
     )
 
 
