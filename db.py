@@ -1,15 +1,18 @@
 """
-Acesso ao Postgres de produção (Railway).
+Acesso ao Postgres de produção.
 
 Ponto único de conexão, usado por `acesso.autenticacao`, `acesso.auditoria` e pela
 persistência de execuções de amostragem. Centralizar aqui significa que pool,
-normalização da URL e tratamento de erro de configuração só existem em um lugar.
+normalização da URL e tratamento de erro de configuração só existem em um lugar —
+e que trocar de host (Docker local hoje, RDS na AWS depois) é só trocar o valor de
+`DATABASE_URL`, sem tocar em código.
 
 Por que normalizar o esquema da URL
 ------------------------------------
-O Railway (como o Heroku antes dele) expõe a variável `DATABASE_URL` com o esquema
-`postgres://`. O SQLAlchemy 2.x só aceita `postgresql://` — a diferença é só o nome
-do dialeto, então a troca é uma substituição de prefixo, não uma reformatação da URL.
+Algumas plataformas (Heroku, Railway) expõem `DATABASE_URL` com o esquema
+`postgres://`; o SQLAlchemy 2.x só aceita `postgresql://`. A diferença é só o nome
+do dialeto, então a troca é uma substituição de prefixo, não uma reformatação da URL —
+mantida aqui para não quebrar se algum host futuro tiver o mesmo hábito.
 
 Por que `pool_pre_ping`
 ------------------------
@@ -51,9 +54,9 @@ def url() -> str:
     valor = os.environ.get("DATABASE_URL")
     if not valor:
         raise RuntimeError(
-            "DATABASE_URL não definida. Em produção (Railway), referencie o serviço "
-            "Postgres nas variáveis do app; em desenvolvimento local, aponte para um "
-            "Postgres próprio antes de rodar `streamlit run app.py`."
+            "DATABASE_URL não definida. Rodando via Docker Compose, confira o `.env` "
+            "(veja `.env.example`); noutro host, aponte para o Postgres desse ambiente "
+            "antes de subir o app."
         )
     if valor.startswith("postgres://"):
         valor = "postgresql://" + valor[len("postgres://"):]

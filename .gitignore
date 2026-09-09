@@ -10,6 +10,7 @@ env/
 # Secrets / env
 .env
 .env.*
+!.env.example
 # O `*` no fim é deliberado: cobre também os backups (`secrets.toml.bak-...`) que
 # sobram de uma troca de senha. Sem ele, o padrão casa só com o nome exato e um
 # arquivo com hash de credencial entra no commit sem ninguém notar.

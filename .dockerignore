@@ -1,0 +1,20 @@
+.git/
+.gitignore
+.gitattributes
+.streamlit/secrets.toml*
+.env
+.env.*
+
+scratch/
+dados/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Planilhas de exemplo — nunca lidas em runtime (só citadas em comentário de docstring
+# em paginas/simulacao_nbr.py); usuário sobe a sua própria pelo file_uploader.
+*.xlsx
+
+.claude/
+*.md

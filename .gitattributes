@@ -1,0 +1,3 @@
+# Scripts que rodam dentro do container (sh/bash) quebram com final de linha CRLF —
+# forçar LF aqui independe da configuração `core.autocrlf` de quem clona no Windows.
+*.sh text eol=lf

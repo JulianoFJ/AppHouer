@@ -4,8 +4,8 @@ Trilha de uso do portal: quem entrou, o que abriu, o que gerou.
 Três backends, escolhidos automaticamente por ordem de preferência
 --------------------------------------------------------------------
 1. **Postgres** (tabela `audit_events`), quando `DATABASE_URL` está definida. É o
-   backend de produção na hospedagem atual (Railway) — substitui o Sheets, que
-   existia só porque o Community Cloud não oferecia banco nenhum.
+   backend de produção, em qualquer host (Docker local, e depois AWS) — substitui
+   o Sheets, que existia só porque o Community Cloud não oferecia banco nenhum.
 2. **Google Sheets**, legado do Community Cloud, mantido por enquanto como
    compatibilidade (não removido "no meio da migração" — ver plano de infraestrutura).
    Só entra em jogo se `DATABASE_URL` não estiver definida e o Sheets estiver
