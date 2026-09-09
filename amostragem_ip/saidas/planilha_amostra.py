@@ -1,14 +1,14 @@
 """
 Geração das duas planilhas de campo — estrutural e qualidade.
 
-Cada arquivo sai com três abas, na ordem em que a equipe usa:
+Cada arquivo sai com duas abas:
 
-  1. **Amostra de Campo** — o formulário. Traz as colunas de identificação e
-     localização do ponto sorteado seguidas das colunas em branco a preencher em
-     campo, já com validação de lista onde faz sentido. É a aba que vai para o tablet.
-  2. **Cadastro (referência)** — as mesmas linhas sorteadas com todas as colunas
-     originais do cadastro municipal, para conferência do que estava declarado.
-  3. **Plano de Amostragem** — a memória de cálculo: parque, plano NBR 5426, semente
+  1. **Amostra de Campo** — a lista dos pontos sorteados: colunas de identificação e
+     localização seguidas de todas as colunas originais do cadastro municipal (a
+     amostragem não altera nem resume, só filtra as linhas sorteadas). É cadastro
+     puro dos pontos a inspecionar, não um formulário de coleta em campo — a equipe
+     registra o levantamento em instrumento próprio, fora desta planilha.
+  2. **Plano de Amostragem** — a memória de cálculo: parque, plano NBR 5426, semente
      do sorteio, cobertura por classe e vias principais contempladas. É a aba que
      sustenta o dado perante o poder concedente e a banca.
 
@@ -21,7 +21,6 @@ from __future__ import annotations
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.datavalidation import DataValidation
 
 from cadastro_ip.saidas._helpers import (
     aplicar_estilo_header,
@@ -34,81 +33,16 @@ from cadastro_ip.saidas._helpers import (
 
 from ..amostrador import COLUNAS_AUXILIARES, GRUPO_ESTRUTURAL, GRUPO_QUALIDADE, ResultadoAmostragem
 
-
-# ── Colunas de preenchimento em campo ─────────────────────────────────────────
-# (rótulo, lista de opções para validação — None = texto/número livre)
-CAMPOS_ESTRUTURAL: list[tuple[str, list[str] | None]] = [
-    ("Data da inspeção", None),
-    ("Equipe / responsável", None),
-    ("Ponto localizado?", ["Sim", "Não — inexistente", "Não — inacessível"]),
-    ("Latitude aferida", None),
-    ("Longitude aferida", None),
-    ("Poste — material", ["Concreto", "Metálico", "Madeira", "Fibra", "Outro"]),
-    ("Poste — altura livre (m)", None),
-    ("Poste — estado", ["Bom", "Regular", "Ruim", "Substituir"]),
-    ("Braço — comprimento (m)", None),
-    ("Braço — inclinação (°)", None),
-    ("Altura de montagem (m)", None),
-    ("Luminária — tipo/modelo", None),
-    ("Luminária — tecnologia", ["LED", "VS", "VM", "MT", "FL", "IN", "Outra"]),
-    ("Luminária — potência (W)", None),
-    ("Luminária — estado", ["Bom", "Regular", "Ruim", "Substituir"]),
-    ("Qtd. de luminárias no poste", None),
-    ("Rede", ["Aérea", "Subterrânea", "Mista"]),
-    ("Fotocélula / relé", ["Individual", "Comando em grupo", "Telegestão", "Ausente"]),
-    ("Via — largura da pista (m)", None),
-    ("Via — nº de faixas", None),
-    ("Via — largura do passeio (m)", None),
-    ("Via — afastamento do poste (m)", None),
-    ("Disposição das luminárias", ["Unilateral", "Bilateral alternada", "Bilateral frente a frente", "Canteiro central", "Outra"]),
-    ("Vão entre postes (m)", None),
-    ("Arborização interferindo", ["Não", "Leve", "Moderada", "Intensa"]),
-    ("Classe viária confirmada?", ["Sim", "Não — corrigir"]),
-    ("Classe viária aferida em campo", None),
-    ("Divergência com o cadastro", ["Não", "Sim — tecnologia", "Sim — potência", "Sim — localização", "Sim — outra"]),
-    ("Nº da foto", None),
-    ("Observações", None),
-]
-
-CAMPOS_QUALIDADE: list[tuple[str, list[str] | None]] = [
-    ("Data da medição", None),
-    ("Hora início", None),
-    ("Hora fim", None),
-    ("Equipe / responsável", None),
-    ("Luxímetro — modelo", None),
-    ("Luxímetro — nº de série", None),
-    ("Certificado de calibração", None),
-    ("Condição do tempo", ["Seco", "Chuva", "Neblina", "Pós-chuva"]),
-    ("Trecho medido — do poste", None),
-    ("Trecho medido — ao poste", None),
-    ("Vão entre postes (m)", None),
-    ("Altura de montagem (m)", None),
-    ("Largura da pista (m)", None),
-    ("Nº de faixas", None),
-    ("Disposição das luminárias", ["Unilateral", "Bilateral alternada", "Bilateral frente a frente", "Canteiro central", "Outra"]),
-    ("Malha — nº de linhas", None),
-    ("Malha — nº de colunas", None),
-    ("Total de pontos medidos", None),
-    ("E mínima medida (lux)", None),
-    ("E máxima medida (lux)", None),
-    ("E média medida (lux)", None),
-    ("Uniformidade U0 (Emín/Eméd)", None),
-    ("Uniformidade longitudinal Ul", None),
-    ("Classe de iluminação adotada", None),
-    ("E média requerida pela NBR 5101 (lux)", None),
-    ("U0 requerida pela NBR 5101", None),
-    ("Atende à NBR 5101?", ["Sim", "Não — iluminância", "Não — uniformidade", "Não — ambos"]),
-    ("Luminárias apagadas no trecho", None),
-    ("Nº da foto", None),
-    ("Observações", None),
-]
+# Colunas geradas só para a amostragem (ordem/via principal) — nunca vieram do
+# cadastro do cliente, então não entram na lista de "colunas originais" a preservar.
+_COLUNAS_GERADAS = {"_via_principal", "_ordem"}
 
 ROTULO_GRUPO = {
     GRUPO_ESTRUTURAL: "Medição Estrutural",
     GRUPO_QUALIDADE: "Medição de Qualidade",
 }
 
-# Colunas de identificação que abrem o formulário de campo.
+# Colunas de identificação que abrem a planilha, antes das colunas originais do cadastro.
 _COLUNAS_IDENTIFICACAO = [
     ("Nº", "_ordem"),
     ("ID do ponto", "_id"),
@@ -122,10 +56,15 @@ _COLUNAS_IDENTIFICACAO = [
 ]
 
 
-def _formulario(
+def _montar_tabela(
     resultado: ResultadoAmostragem, grupo: str
-) -> tuple[pd.DataFrame, list[tuple[str, list[str] | None]]]:
-    """Monta o DataFrame do formulário de campo (identificação + colunas em branco)."""
+) -> pd.DataFrame:
+    """
+    Monta o DataFrame da aba única: identificação do ponto sorteado seguida de
+    todas as colunas originais do cadastro do município (tecnologia, potência,
+    poste — o que quer que o cadastro traga). Nenhum campo em branco para
+    preenchimento futuro: a inspeção em si é registrada em instrumento à parte.
+    """
     amostra = (resultado.estrutural if grupo == GRUPO_ESTRUTURAL else resultado.qualidade).copy()
     chaves_principais = {v.chave for v in resultado.vias_principais}
     amostra["_via_principal"] = amostra["_chave_via"].map(
@@ -136,18 +75,18 @@ def _formulario(
     amostra = amostra.sort_values(["_bairro", "_logradouro", "_id"], kind="stable").reset_index(drop=True)
     amostra["_ordem"] = amostra.index + 1
 
-    campos = CAMPOS_ESTRUTURAL if grupo == GRUPO_ESTRUTURAL else CAMPOS_QUALIDADE
     dados = {rotulo: amostra[coluna] for rotulo, coluna in _COLUNAS_IDENTIFICACAO}
     df = pd.DataFrame(dados)
-    for rotulo, _ in campos:
-        df[rotulo] = ""
-    return df, campos
+    originais = [c for c in amostra.columns if c not in COLUNAS_AUXILIARES and c not in _COLUNAS_GERADAS]
+    for coluna in originais:
+        df[coluna] = amostra[coluna].to_numpy()
+    return df
 
 
-def _aba_formulario(wb: Workbook, resultado: ResultadoAmostragem, grupo: str) -> None:
+def _aba_amostra(wb: Workbook, resultado: ResultadoAmostragem, grupo: str) -> None:
     ws = wb.active
     ws.title = "Amostra de Campo"
-    df, campos = _formulario(resultado, grupo)
+    df = _montar_tabela(resultado, grupo)
 
     titulo = (
         f"{ROTULO_GRUPO[grupo]} — {resultado.municipio or 'Município'}"
@@ -166,39 +105,6 @@ def _aba_formulario(wb: Workbook, resultado: ResultadoAmostragem, grupo: str) ->
     # A linha 1 é o título mesclado; a largura tem que sair do cabeçalho real (linha 2).
     for indice, coluna in enumerate(df.columns, start=1):
         ws.column_dimensions[get_column_letter(indice)].width = max(10, min(38, len(str(coluna)) + 4))
-
-    # Validação por lista nas colunas de campo que têm domínio fechado. Sem linha de
-    # dado (grupo vazio — ex.: 0% estrutural, para amostrar um lote só de qualidade,
-    # como pontos de IAE) não há intervalo C3:C2 que faça sentido; openpyxl rejeita
-    # esse range (`ValueError: 2 must be greater than 3`), então a validação é pulada.
-    primeira_coluna_campo = len(_COLUNAS_IDENTIFICACAO) + 1
-    ultima_linha = len(df) + 2
-    if ultima_linha >= 3:
-        for deslocamento, (rotulo, opcoes) in enumerate(campos):
-            if not opcoes:
-                continue
-            letra = get_column_letter(primeira_coluna_campo + deslocamento)
-            validacao = DataValidation(
-                type="list", formula1='"' + ",".join(opcoes) + '"', allow_blank=True
-            )
-            validacao.error = f"Valor fora da lista prevista para {rotulo}."
-            validacao.errorTitle = "Valor inválido"
-            ws.add_data_validation(validacao)
-            validacao.add(f"{letra}3:{letra}{ultima_linha}")
-
-
-def _aba_referencia(wb: Workbook, resultado: ResultadoAmostragem, grupo: str) -> None:
-    """Linhas sorteadas com as colunas originais do cadastro, para conferência."""
-    amostra = (resultado.estrutural if grupo == GRUPO_ESTRUTURAL else resultado.qualidade).copy()
-    originais = [c for c in amostra.columns if c not in COLUNAS_AUXILIARES]
-    if not originais:
-        return
-    ws = wb.create_sheet("Cadastro (referência)")
-    df = amostra.sort_values(["_bairro", "_logradouro", "_id"], kind="stable")[originais].reset_index(drop=True)
-    df.insert(0, "Nº", df.index + 1)
-    escrever_dataframe(ws, df, linha_inicial=1)
-    ws.freeze_panes = "B2"
-    autoajustar_largura(ws, len(df.columns))
 
 
 def _aba_plano(wb: Workbook, resultado: ResultadoAmostragem, grupo: str) -> None:
@@ -291,10 +197,9 @@ def gerar(resultado: ResultadoAmostragem, grupo: str) -> bytes:
     if grupo not in (GRUPO_ESTRUTURAL, GRUPO_QUALIDADE):
         raise ValueError(f"Grupo desconhecido: {grupo!r}")
     wb = Workbook()
-    _aba_formulario(wb, resultado, grupo)
-    _aba_referencia(wb, resultado, grupo)
+    _aba_amostra(wb, resultado, grupo)
     _aba_plano(wb, resultado, grupo)
     return workbook_para_bytes(wb)
 
 
-__all__ = ["gerar", "CAMPOS_ESTRUTURAL", "CAMPOS_QUALIDADE", "ROTULO_GRUPO"]
+__all__ = ["gerar", "ROTULO_GRUPO"]

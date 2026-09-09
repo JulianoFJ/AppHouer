@@ -112,13 +112,19 @@ concedente refazer o sorteio e verificar que a amostra não foi escolhida a dedo
 
 ## Saídas
 
-Cada planilha (`saidas/planilha_amostra.gerar(resultado, grupo)`) tem três abas:
+Cada planilha (`saidas/planilha_amostra.gerar(resultado, grupo)`) tem duas abas:
 
 | Aba | Conteúdo |
 |---|---|
-| **Amostra de Campo** | Formulário: identificação/localização do ponto + colunas em branco para preencher em campo, com validação por lista onde o domínio é fechado. Ordenada por bairro e logradouro, que é como a equipe percorre o município. |
-| **Cadastro (referência)** | As mesmas linhas com todas as colunas originais do cadastro, para conferir o que estava declarado. |
+| **Amostra de Campo** | Cadastro puro dos pontos sorteados: identificação/localização do ponto seguida de **todas as colunas originais do cadastro do município** (tecnologia, potência, poste — o que o cadastro trouxer). Não é formulário de inspeção — não tem coluna em branco para preencher depois; a coleta de campo é registrada em instrumento à parte. Ordenada por bairro e logradouro, que é como a equipe percorre o município. |
 | **Plano de Amostragem** | Memória de cálculo: parque, plano NBR 5426 (letra, n, Ac/Re), semente, cobertura por classe com peso de extrapolação, vias principais, abrangência e ressalvas. |
+
+**Decisão de 08/09/2026:** a versão original trazia uma terceira aba ("Amostra de Campo"
+como formulário com ~29 colunas em branco tipo "Poste — material", "Luminária — potência (W)")
+e uma aba "Cadastro (referência)" separada com os dados reais. Isso confundia: a planilha
+parecia já ser o instrumento de inspeção, mas os dados que a equipe precisava consultar
+(tecnologia, potência já cadastradas) ficavam escondidos numa segunda aba. Fundidas em
+uma só, sem os campos de preenchimento.
 
 `relatorio.gerar(resultado)` produz o mesmo conteúdo em Markdown, para anexar ao
 relatório de engenharia.
