@@ -1,17 +1,14 @@
 """
 Trilha de uso do portal: quem entrou, o que abriu, o que gerou.
 
-Três backends, escolhidos automaticamente por ordem de preferência
---------------------------------------------------------------------
-1. **Postgres** (tabela `audit_events`), quando `DATABASE_URL` está definida. É o
-   backend de produção na hospedagem atual (Railway) — substitui o Sheets, que
-   existia só porque o Community Cloud não oferecia banco nenhum.
-2. **Google Sheets**, legado do Community Cloud, mantido por enquanto como
-   compatibilidade (não removido "no meio da migração" — ver plano de infraestrutura).
-   Só entra em jogo se `DATABASE_URL` não estiver definida e o Sheets estiver
-   configurado em `st.secrets`.
-3. **CSV local**, último recurso, quando nenhum dos dois acima está disponível. É o
-   modo de desenvolvimento sem Postgres à mão.
+Dois backends, escolhidos automaticamente
+-----------------------------------------
+1. **Google Sheets**, quando `st.secrets` traz a service account e o id da planilha.
+   É o backend de produção. Razão: o disco do Streamlit Community Cloud é efêmero — o
+   container é recriado a cada redeploy e o app hiberna por inatividade —, então
+   qualquer arquivo escrito lá dura dias, não meses. A planilha vive fora do container.
+2. **CSV local**, quando o Sheets não está configurado. É o modo de desenvolvimento e
+   o modo servidor próprio, onde o disco persiste de fato.
 
 Princípio inegociável: **auditoria nunca derruba o app**. Toda falha de escrita é
 engolida e reportada só no stdout (que no Cloud vira log de aplicação). Um portal que
@@ -47,9 +44,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
-from sqlalchemy import text
-
-import db
 
 COLUNAS = [
     "timestamp_utc", "evento", "usuario", "nome", "perfil",
@@ -117,14 +111,8 @@ def _planilha():
         return None
 
 
-def _pg_disponivel() -> bool:
-    return bool(os.environ.get("DATABASE_URL"))
-
-
 def backend_ativo() -> str:
     """Nome do backend em uso — exibido no rodapé da tela de administração."""
-    if _pg_disponivel():
-        return "Postgres"
     return "Google Sheets" if _planilha() is not None else f"CSV local ({ARQUIVO_CSV})"
 
 
@@ -139,35 +127,8 @@ def _escrever_csv(linhas: list[list]) -> None:
         w.writerows(linhas)
 
 
-def _escrever_pg(linhas: list[list]) -> bool:
-    """`True` se o lote foi gravado. `""` vira `None`: a planilha/CSV toleram string
-    vazia num campo numérico, a coluna `segundos_sessao` (Float) do Postgres não."""
-    try:
-        registros = [
-            {col: (valor if valor != "" else None) for col, valor in zip(COLUNAS, linha)}
-            for linha in linhas
-        ]
-        with db.engine().begin() as conexao:
-            conexao.execute(
-                text(
-                    "insert into audit_events "
-                    "(timestamp_utc, evento, usuario, nome, perfil, sessao_id, "
-                    " segundos_sessao, alvo, detalhe) "
-                    "values (:timestamp_utc, :evento, :usuario, :nome, :perfil, "
-                    " :sessao_id, :segundos_sessao, :alvo, :detalhe)"
-                ),
-                registros,
-            )
-        return True
-    except Exception as erro:                     # noqa: BLE001
-        print(f"[acesso] falha ao gravar no Postgres: {erro!r}", flush=True)
-        return False
-
-
 def _escrever(linhas: list[list]) -> None:
-    """Grava o lote no primeiro backend disponível — ver ordem no docstring do módulo."""
-    if _pg_disponivel() and _escrever_pg(linhas):
-        return
+    """Grava o lote no backend disponível; o CSV é a rede de segurança do Sheets."""
     aba = _planilha()
     if aba is not None:
         try:
@@ -275,18 +236,6 @@ def ler_eventos(limite: int = 5000):
 
     vazio = pd.DataFrame(columns=COLUNAS)
     try:
-        if _pg_disponivel():
-            colunas_sql = ", ".join(COLUNAS)
-            with db.engine().connect() as conexao:
-                df = pd.read_sql(
-                    text(f"select {colunas_sql} from audit_events "
-                         "order by timestamp_utc desc limit :limite"),
-                    conexao, params={"limite": limite},
-                )
-            # Já vem ordenado e limitado pela consulta — não passa pelo
-            # reverse+head do bloco comum, pensado para CSV/Sheets (ordem de inserção).
-            return df if not df.empty else vazio
-
         aba = _planilha()
         if aba is not None:
             registros = aba.get_all_records()

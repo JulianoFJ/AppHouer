@@ -1,16 +1,11 @@
 """
-Cadastra (ou reseta a senha de) um usuário na tabela `users` do Postgres.
+Gera o bloco de secrets de um usuário, com a senha já em hash.
 
     py -m acesso.gerar_hash                    # pergunta login e senha
     py -m acesso.gerar_hash --login jferreira --nome "Juliano Ferreira"
 
 A senha é lida sem eco (`getpass`) e nunca é gravada em lugar nenhum — nem no histórico
-do terminal, nem em arquivo. Requer `DATABASE_URL` no ambiente, apontando para o mesmo
-Postgres que o app usa (local, ou o de produção via `railway run`).
-
-Rodar de novo para um login que já existe faz UPSERT: atualiza nome/perfil/hash e
-reativa a conta (`ativo = true`) — é assim que se troca a senha de alguém ou se
-readmite um acesso revogado, sem precisar de um comando separado para cada caso.
+do terminal, nem em arquivo. O que sai é só o hash, que é o que vai para o secrets.
 
 Rode a partir de `app/`, que é onde o pacote `acesso` está no sys.path.
 """
@@ -22,9 +17,6 @@ import getpass
 import secrets
 import sys
 
-from sqlalchemy import text
-
-import db
 from .autenticacao import ITERACOES, gerar_hash
 
 TAMANHO_SUGESTAO = 16
@@ -40,7 +32,7 @@ def main() -> int:
         except (AttributeError, OSError):
             pass
 
-    p = argparse.ArgumentParser(description="Cadastra ou atualiza um usuário em `users`.")
+    p = argparse.ArgumentParser(description="Gera o bloco [auth.usuarios.X] do secrets.")
     p.add_argument("--login", help="identificador de acesso (minúsculas, sem espaço)")
     p.add_argument("--nome", help="nome exibido no portal e na trilha de uso")
     p.add_argument("--perfil", default="usuario", help="rótulo livre (padrão: usuario)")
@@ -69,25 +61,21 @@ def main() -> int:
     print(f"\nDerivando com PBKDF2-SHA256, {ITERACOES:,} iterações...".replace(",", "."))
     registro = gerar_hash(senha)
 
-    try:
-        with db.engine().begin() as conexao:
-            conexao.execute(
-                text(
-                    "insert into users (login, nome, senha_hash, perfil, ativo) "
-                    "values (:login, :nome, :senha_hash, :perfil, true) "
-                    "on conflict (login) do update set "
-                    "nome = excluded.nome, senha_hash = excluded.senha_hash, "
-                    "perfil = excluded.perfil, ativo = true"
-                ),
-                {"login": login, "nome": nome, "senha_hash": registro, "perfil": args.perfil},
-            )
-    except Exception as erro:
-        print(f"\nFalha ao gravar no Postgres: {erro!r}", file=sys.stderr)
-        print("Confira se DATABASE_URL está definida e as migrations foram aplicadas "
-              "(`py -m alembic upgrade head`).", file=sys.stderr)
-        return 1
+    print("\n" + "-" * 72)
+    print("Cole o bloco abaixo em .streamlit/secrets.toml (local) ou no painel de")
+    print("secrets do Streamlit Cloud (publicado). NÃO faça commit deste conteúdo.")
+    print("-" * 72)
+    print(f"""
+[auth]
+expiracao_horas = 12
 
-    print(f"\nUsuário '{login}' ({nome}, perfil={args.perfil}) gravado em `users`.")
+[auth.usuarios.{login}]
+nome = "{nome}"
+perfil = "{args.perfil}"
+senha_hash = "{registro}"
+""")
+    print("Se o bloco [auth] já existir no seu secrets, copie apenas a parte")
+    print(f"[auth.usuarios.{login}].")
     return 0
 
 
