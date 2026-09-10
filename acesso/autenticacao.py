@@ -173,6 +173,51 @@ def esta_configurado() -> bool:
     return bool(_usuarios())
 
 
+# ── Administração (tela e CLI) ──────────────────────────────────────────────
+def usuarios_cadastrados() -> dict:
+    """Todos os usuários por login, ativos e inativos — para a tela de administração.
+    Diferente de `_usuarios()` (só ativos), que é a que decide quem consegue logar."""
+    try:
+        with db.engine().connect() as conexao:
+            linhas = conexao.execute(text(
+                "select login, nome, perfil, ativo from users order by login"
+            )).mappings().all()
+        return {linha["login"]: dict(linha) for linha in linhas}
+    except Exception:
+        return {}
+
+
+def criar_ou_atualizar_usuario(login: str, nome: str, perfil: str, senha: str) -> None:
+    """
+    Grava um login em `users`: cadastra se for novo, ou atualiza nome/perfil/senha (e
+    reativa) se já existir. É a mesma operação por trás de `acesso/gerar_hash.py` e do
+    formulário de `paginas/administracao.py` — uma serve quem tem acesso ao servidor,
+    a outra quem só tem o perfil admin no portal; nenhuma duplica a lógica da outra.
+    """
+    registro = gerar_hash(senha)
+    with db.engine().begin() as conexao:
+        conexao.execute(
+            text(
+                "insert into users (login, nome, senha_hash, perfil, ativo) "
+                "values (:login, :nome, :senha_hash, :perfil, true) "
+                "on conflict (login) do update set "
+                "nome = excluded.nome, senha_hash = excluded.senha_hash, "
+                "perfil = excluded.perfil, ativo = true"
+            ),
+            {"login": login, "nome": nome, "senha_hash": registro, "perfil": perfil},
+        )
+
+
+def definir_ativo(login: str, ativo: bool) -> None:
+    """Ativa/desativa um login sem apagar a linha. Não usa FK para `audit_events`
+    (ver migration), então revogar um acesso nunca afeta o histórico já registrado."""
+    with db.engine().begin() as conexao:
+        conexao.execute(
+            text("update users set ativo = :ativo where login = :login"),
+            {"ativo": ativo, "login": login},
+        )
+
+
 # ── Bloqueio por tentativas ──────────────────────────────────────────────────
 # O contador vive no session_state, portanto é por aba do navegador. Isso NÃO impede
 # força bruta distribuída — para isso seria preciso estado compartilhado entre sessões,

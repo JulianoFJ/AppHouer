@@ -1,7 +1,7 @@
 """
 Administração de acessos — visível apenas para quem tem `perfil = "admin"`.
 
-Duas funções: emitir credencial para uma pessoa nova e ler a trilha de uso.
+Duas funções: gerenciar quem tem credencial e ler a trilha de uso.
 
 Por que não existe "criar conta" na tela de login
 --------------------------------------------------
@@ -10,12 +10,10 @@ e entraria. Num portal cujo propósito é justamente conter modelos, bases e met
 isso seria o mesmo que não ter senha. O modelo aqui é **provisionamento por
 administrador** — alguém já autorizado emite a credencial de quem entra.
 
-Esta página não escreve no `secrets` sozinha, e isso é limitação da plataforma, não
-descuido: no Streamlit Cloud o `secrets` é gerenciado pelo painel e é somente leitura
-em runtime; localmente, gravar um arquivo que o processo relê a quente daria margem a
-uma condição de corrida entre o formulário e o próprio login. Então a página faz a
-parte difícil (derivar o hash com o mesmo algoritmo do login, montar o TOML) e deixa
-para o administrador o passo de colar — que leva dez segundos e é auditável.
+Esta página grava direto na tabela `users` (via `acesso.autenticacao`), a mesma que o
+login consulta — não existe mais um passo manual de colar TOML no meio: com Postgres
+disponível, cadastrar ou revogar aqui já é o que vale na próxima tentativa de login,
+sem redeploy nem edição de arquivo.
 """
 
 from __future__ import annotations
@@ -40,14 +38,15 @@ aba_usuarios, aba_trilha = st.tabs(["Usuários", "Trilha de uso"])
 
 # ── Usuários ─────────────────────────────────────────────────────────────────
 with aba_usuarios:
-    cadastrados = autenticacao._usuarios()
+    cadastrados = autenticacao.usuarios_cadastrados()
     st.markdown("#### Quem tem acesso hoje")
     if cadastrados:
         st.dataframe(
             pd.DataFrame([
                 {"Login": login,
                  "Nome": dados.get("nome", ""),
-                 "Perfil": dados.get("perfil", "usuario")}
+                 "Perfil": dados.get("perfil", "usuario"),
+                 "Ativo": "Sim" if dados.get("ativo") else "Não"}
                 for login, dados in sorted(cadastrados.items())
             ]),
             hide_index=True, use_container_width=True,
@@ -55,14 +54,12 @@ with aba_usuarios:
     else:
         st.info("Nenhum usuário cadastrado.")
 
-    st.caption(
-        "Para **revogar** um acesso, apague o bloco `[auth.usuarios.<login>]` do "
-        "secrets. Ninguém mais é afetado — é isso que uma senha compartilhada não "
-        "permitiria fazer sem incomodar a equipe inteira."
-    )
-
     st.divider()
-    st.markdown("#### Emitir uma credencial nova")
+    st.markdown("#### Cadastrar ou atualizar")
+    st.caption(
+        "Um login que já existe é **atualizado** (nome, perfil e senha), e reativado "
+        "se estava desativado — é assim que se troca a senha de alguém, sem tela à parte."
+    )
 
     with st.form("nova_credencial"):
         c1, c2 = st.columns(2)
@@ -78,15 +75,13 @@ with aba_usuarios:
                         horizontal=False)
         senha_manual = st.text_input("Senha (se manual)", type="password",
                                      help="Mínimo de 10 caracteres.")
-        emitir = st.form_submit_button("Gerar bloco de credencial", type="primary")
+        emitir = st.form_submit_button("Salvar", type="primary")
 
     if emitir:
         erros = []
         login_norm = (novo_login or "").strip().lower()
         if not login_norm or " " in login_norm:
             erros.append("Login vazio ou com espaço.")
-        if login_norm in cadastrados:
-            erros.append(f"Já existe um usuário `{login_norm}`.")
         if modo == "Definir manualmente" and len(senha_manual or "") < 10:
             erros.append("Senha manual com menos de 10 caracteres.")
 
@@ -94,29 +89,52 @@ with aba_usuarios:
             for e in erros:
                 st.error(e)
         else:
+            era_existente = login_norm in cadastrados
             senha = (_secrets.token_urlsafe(16) if modo == "Sortear uma forte"
                      else senha_manual)
-            with st.spinner("Derivando o hash (PBKDF2, 600 mil iterações)..."):
-                registro = autenticacao.gerar_hash(senha)
+            nome_norm = (novo_nome or login_norm).strip()
+            with st.spinner("Derivando o hash (PBKDF2, 600 mil iterações) e gravando..."):
+                autenticacao.criar_ou_atualizar_usuario(
+                    login_norm, nome_norm, novo_perfil, senha)
 
-            st.success("Credencial gerada. Ela ainda **não** está ativa — falta colar.")
-            st.markdown("**1. Envie a senha à pessoa** (por canal privado; ela não é "
+            st.success(
+                f"Usuário `{login_norm}` {'atualizado' if era_existente else 'cadastrado'} "
+                "e **já pode logar** — nenhum passo manual a mais."
+            )
+            st.markdown("**Envie a senha à pessoa** (por canal privado; ela não é "
                         "recuperável depois desta tela):")
             st.code(senha, language=None)
-            st.markdown("**2. Cole este bloco** no `secrets` — painel do Streamlit Cloud "
-                        "(*Settings → Secrets*) ou `app/.streamlit/secrets.toml` local. "
-                        "No Cloud o app reinicia sozinho ao salvar:")
-            st.code(
-                f'[auth.usuarios.{login_norm}]\n'
-                f'nome = "{(novo_nome or login_norm).strip()}"\n'
-                f'perfil = "{novo_perfil}"\n'
-                f'senha_hash = "{registro}"',
-                language="toml",
-            )
             st.caption("A senha em claro não é registrada na trilha nem gravada em disco "
-                       "— só o hash sai daqui.")
-            auditoria.registrar_acao("credencial_emitida", alvo=login_norm,
-                                     detalhe=f"perfil {novo_perfil}")
+                       "— só o hash vai para o banco.")
+            auditoria.registrar_acao(
+                "credencial_atualizada" if era_existente else "credencial_emitida",
+                alvo=login_norm, detalhe=f"perfil {novo_perfil}",
+            )
+            st.rerun()
+
+    st.divider()
+    st.markdown("#### Ativar / desativar acesso")
+    st.caption(
+        "Desativar não apaga o login nem o histórico dele na trilha de uso — só "
+        "impede novas entradas. Reative a qualquer momento, ou emita senha nova acima."
+    )
+    if cadastrados:
+        alvo = st.selectbox("Login", sorted(cadastrados), key="alvo_status")
+        ativo_hoje = bool(cadastrados[alvo].get("ativo"))
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            if ativo_hoje:
+                if st.button("Desativar", type="secondary"):
+                    autenticacao.definir_ativo(alvo, False)
+                    auditoria.registrar_acao("acesso_revogado", alvo=alvo)
+                    st.rerun()
+            else:
+                if st.button("Reativar", type="primary"):
+                    autenticacao.definir_ativo(alvo, True)
+                    auditoria.registrar_acao("acesso_reativado", alvo=alvo)
+                    st.rerun()
+        with c2:
+            st.caption(f"Status atual: {'ativo' if ativo_hoje else 'desativado'}.")
 
 # ── Trilha de uso ────────────────────────────────────────────────────────────
 with aba_trilha:

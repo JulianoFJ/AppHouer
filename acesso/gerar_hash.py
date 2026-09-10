@@ -6,7 +6,8 @@ Cadastra (ou reseta a senha de) um usuário na tabela `users` do Postgres.
 
 A senha é lida sem eco (`getpass`) e nunca é gravada em lugar nenhum — nem no histórico
 do terminal, nem em arquivo. Requer `DATABASE_URL` no ambiente, apontando para o mesmo
-Postgres que o app usa (local, ou o de produção via `railway run`).
+Postgres que o app usa (`docker compose exec app python -m acesso.gerar_hash ...`, ou
+localmente com a mesma variável exportada).
 
 Rodar de novo para um login que já existe faz UPSERT: atualiza nome/perfil/hash e
 reativa a conta (`ativo = true`) — é assim que se troca a senha de alguém ou se
@@ -22,10 +23,7 @@ import getpass
 import secrets
 import sys
 
-from sqlalchemy import text
-
-import db
-from .autenticacao import ITERACOES, gerar_hash
+from .autenticacao import ITERACOES, criar_ou_atualizar_usuario
 
 TAMANHO_SUGESTAO = 16
 
@@ -67,20 +65,9 @@ def main() -> int:
             return 1
 
     print(f"\nDerivando com PBKDF2-SHA256, {ITERACOES:,} iterações...".replace(",", "."))
-    registro = gerar_hash(senha)
 
     try:
-        with db.engine().begin() as conexao:
-            conexao.execute(
-                text(
-                    "insert into users (login, nome, senha_hash, perfil, ativo) "
-                    "values (:login, :nome, :senha_hash, :perfil, true) "
-                    "on conflict (login) do update set "
-                    "nome = excluded.nome, senha_hash = excluded.senha_hash, "
-                    "perfil = excluded.perfil, ativo = true"
-                ),
-                {"login": login, "nome": nome, "senha_hash": registro, "perfil": args.perfil},
-            )
+        criar_ou_atualizar_usuario(login, nome, args.perfil, senha)
     except Exception as erro:
         print(f"\nFalha ao gravar no Postgres: {erro!r}", file=sys.stderr)
         print("Confira se DATABASE_URL está definida e as migrations foram aplicadas "
