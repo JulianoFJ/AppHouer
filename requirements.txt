@@ -26,8 +26,11 @@ google-auth>=2.28.0
 # ~100 MB e só serviria para rasterizar figura do Plotly.
 python-pptx>=1.0.0
 
-# Hospedagem em produção (Railway) — banco de dados Postgres real, substituindo
-# o par CSV local / Google Sheets como armazenamento de autenticação e auditoria.
+# Hospedagem em produção — banco de dados Postgres real, substituindo o par CSV
+# local / Google Sheets como armazenamento de autenticação e auditoria.
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 alembic>=1.13.0
+
+# Suíte de testes (tests/) — roda contra o Postgres real do docker-compose.
+pytest>=8.0.0

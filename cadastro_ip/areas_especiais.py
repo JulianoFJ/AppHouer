@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from hub_municipios.config import DADOS
+from caminhos_dados import DADOS
 
 CACHE_DIR = DADOS / "amostragem" / "areas_especiais"
 

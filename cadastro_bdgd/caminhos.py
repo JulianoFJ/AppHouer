@@ -29,7 +29,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from hub_municipios.config import DADOS
+from caminhos_dados import DADOS
 
 PACOTE = Path(__file__).resolve().parent
 

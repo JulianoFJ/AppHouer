@@ -116,6 +116,8 @@ def listar_disponiveis() -> pd.DataFrame:
     ponto a ponto exige o `.gdb` da distribuidora e GDAL, que não existem no Streamlit
     Cloud. Oferecer um município que não vai abrir seria pior que não oferecer.
     """
+    # `config.ENTES_CACHE` é o derivado publicável do próprio Hub (lista de municípios
+    # via SICONFI) — dependência real, não um resto de config emprestado.
     from hub_municipios import config
 
     from . import caminhos

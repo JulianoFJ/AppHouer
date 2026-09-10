@@ -1,14 +1,26 @@
 """
 Caminhos e parâmetros do Hub de Municípios.
 
-Layout de dados (definido em conjunto com o usuário):
+Os caminhos de dados BRUTOS/intermediários (`DADOS`, `BDGD_BRUTOS`, `SICONFI_CACHE`,
+etc.) vieram de `caminhos_dados.py`, na raiz do projeto — são genéricos, usados também
+por `cadastro_bdgd`/`cadastro_ip`, e por isso não moram só aqui (até 10/09/2026,
+moravam: `cadastro_bdgd`/`cadastro_ip` importavam direto deste módulo, um pacote de
+domínio que não é o deles — via de mão dupla que este arquivo resolve reexportando em
+vez de duplicar, para não quebrar os ~10 pontos dentro do próprio Hub que já chamam
+`config.garantir_pastas()`/`config.pastas_bdgd()`).
+
+O que fica só aqui: o derivado LEVE e publicável do próprio Hub (`DATA_PACOTE` e o que
+vive dentro dele) e os parâmetros de negócio do Hub — nenhum dos dois é genérico o
+bastante para o módulo compartilhado.
+
+Layout de dados:
 
     Plataforma_IP/
-      dados/                          <- fora do repositório git (o repo é app/)
+      dados/                          <- fora do repositório git (o repo é AppHouer/)
         bdgd/brutos/                  <- os .gdb entram aqui (dezenas de GB)
         bdgd/processados/             <- parquet intermediário por distribuidora
         siconfi/cache/                <- cadastro de entes + consultas COSIP
-      app/
+      AppHouer/
         hub_municipios/data/          <- derivado LEVE, versionável e publicável
           bdgd_municipios.parquet     <- agregado por município (poucos MB)
 
@@ -18,50 +30,20 @@ o derivado agregado é pequeno e acompanha o app.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-# app/hub_municipios/config.py -> app/hub_municipios -> app -> Plataforma_IP
+import caminhos_dados
+
 PACOTE = Path(__file__).resolve().parent
-APP = PACOTE.parent
-RAIZ = APP.parent
 
-# ── Dados brutos e intermediários (fora do repositório) ──────────────────────
-# Sobrescreva com a variável de ambiente PLATAFORMA_IP_DADOS para apontar outro disco.
-#
-# `HOUER_DADOS` continua sendo aceita como nome antigo: ela está configurada nas
-# máquinas que já processam a BDGD, e quebrar essas configurações silenciosamente
-# faria o ETL cair de volta para `RAIZ/dados` sem avisar — que existe, está vazia, e
-# produziria um agregado nacional truncado em vez de um erro.
-def _env(nome_novo: str, nome_antigo: str) -> str | None:
-    return os.environ.get(nome_novo) or os.environ.get(nome_antigo)
-
-
-DADOS = Path(_env("PLATAFORMA_IP_DADOS", "HOUER_DADOS") or (RAIZ / "dados"))
-BDGD_BRUTOS = DADOS / "bdgd" / "brutos"
-BDGD_PROCESSADOS = DADOS / "bdgd" / "processados"
-SICONFI_CACHE = DADOS / "siconfi" / "cache"
-
-# Repositórios adicionais de .gdb, varridos junto com BDGD_BRUTOS. O acervo nacional
-# 2024 vive no Drive compartilhado do time — ler de lá funciona, mas cada base é baixada
-# sob demanda pelo Drive File Stream: medido em 28/08/2026, ~7 min para uma base de
-# 5,65 GB contra ~55 s para uma base local de 15,9 GB. O gargalo é rede, não CPU.
-# Sobrescreva com PLATAFORMA_IP_BDGD_EXTRA (caminhos separados por ';');
-# `HOUER_BDGD_EXTRA` segue aceita como nome antigo, pela mesma razão de DADOS.
-BDGD_PASTAS_EXTRA = [
-    Path(r"G:\Drives compartilhados\Head de Energia\06. Projetos"
-         r"\PVSC - Assistente de Pré-Viabilidade\CLP\Dados BDGD"),
-]
-_extra = _env("PLATAFORMA_IP_BDGD_EXTRA", "HOUER_BDGD_EXTRA")
-if _extra:
-    BDGD_PASTAS_EXTRA = [Path(p) for p in _extra.split(";") if p.strip()]
-
-
-def pastas_bdgd() -> list[Path]:
-    """Pasta local de brutos + repositórios extras que existirem no momento."""
-    pastas = [BDGD_BRUTOS]
-    pastas += [p for p in BDGD_PASTAS_EXTRA if p.exists()]
-    return pastas
+# ── Dados brutos e intermediários (fora do repositório) — reexportados ───────
+DADOS = caminhos_dados.DADOS
+BDGD_BRUTOS = caminhos_dados.BDGD_BRUTOS
+BDGD_PROCESSADOS = caminhos_dados.BDGD_PROCESSADOS
+SICONFI_CACHE = caminhos_dados.SICONFI_CACHE
+ANEEL_CACHE = caminhos_dados.ANEEL_CACHE
+BDGD_PASTAS_EXTRA = caminhos_dados.BDGD_PASTAS_EXTRA
+pastas_bdgd = caminhos_dados.pastas_bdgd
 
 # ── Derivado leve, que acompanha o app ──────────────────────────────────────
 DATA_PACOTE = PACOTE / "data"
@@ -70,14 +52,11 @@ BDGD_TECNOLOGIA = DATA_PACOTE / "bdgd_tecnologia.parquet"
 ENTES_CACHE = DATA_PACOTE / "entes_siconfi.parquet"
 TARIFAS_B4A = DATA_PACOTE / "tarifas_b4a.parquet"
 
-# Bruto do ETL de tarifas (CSV baixado do CKAN da ANEEL), fora do repositório.
-ANEEL_CACHE = DADOS / "aneel" / "cache"
-
 
 def garantir_pastas() -> None:
-    """Cria as pastas de dados se ainda não existirem. Idempotente."""
-    for p in (BDGD_BRUTOS, BDGD_PROCESSADOS, SICONFI_CACHE, ANEEL_CACHE, DATA_PACOTE):
-        p.mkdir(parents=True, exist_ok=True)
+    """Cria as pastas de dados (genéricas + derivado do Hub) se não existirem. Idempotente."""
+    caminhos_dados.garantir_pastas()
+    DATA_PACOTE.mkdir(parents=True, exist_ok=True)
 
 
 # ── Parâmetros de negócio ───────────────────────────────────────────────────

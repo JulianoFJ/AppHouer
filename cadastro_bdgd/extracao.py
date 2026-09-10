@@ -57,6 +57,10 @@ from typing import Optional, Sequence
 
 import pandas as pd
 
+# Dependência real, não emprestada: `config.BDGD_MUNICIPIOS` é o derivado publicável do
+# próprio Hub (lista de municípios/entes), que este módulo lê como referência — os
+# caminhos genéricos (pastas_bdgd, garantir_pastas, BDGD_PROCESSADOS) vieram de
+# `caminhos_dados` em 10/09/2026, mas isto aqui fica em `hub_municipios` mesmo.
 from hub_municipios import bdgd, config
 
 from . import caminhos
