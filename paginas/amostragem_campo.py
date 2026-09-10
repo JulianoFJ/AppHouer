@@ -13,8 +13,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from acesso import registrar_acao
-from amostragem_ip import amostrador, nbr5426, relatorio
+from acesso import registrar_acao, usuario_atual
+from amostragem_ip import amostrador, nbr5426, persistencia, relatorio
 from amostragem_ip.amostrador import GRUPO_ESTRUTURAL, GRUPO_QUALIDADE
 from amostragem_ip.leitura import ler_planilha
 from amostragem_ip.saidas import planilha_amostra
@@ -421,6 +421,46 @@ def _origem_bdgd(col_esquerda, col_direita) -> tuple[pd.DataFrame | None, str, s
     return montado.dados, str(linha["ente"]), str(linha["uf"])
 
 
+# ── Execuções anteriores ────────────────────────────────────────────────────
+# Só lista/exibe — não regenera xlsx/relatório a partir daqui. O que garante que uma
+# amostra sorteada sobrevive ao fim da sessão é o registro em si, não a capacidade de
+# baixar de novo; reconstruir os arquivos a partir do que foi persistido é um passo à
+# parte, se algum dia for preciso.
+with st.expander("📋 Execuções anteriores"):
+    execucoes = persistencia.listar_execucoes()
+    if execucoes.empty:
+        st.caption("Nenhuma execução registrada ainda.")
+    else:
+        st.dataframe(
+            execucoes.rename(columns={
+                "id": "ID", "criado_em": "Quando", "identificacao": "Município/UF",
+                "status": "Status", "total_amostra": "Amostra", "total_parque": "Parque",
+                "usuario": "Quem",
+            }),
+            hide_index=True, use_container_width=True, height=180,
+        )
+        execucao_escolhida = st.selectbox(
+            "Ver pontos de", execucoes["id"],
+            format_func=lambda i: execucoes.set_index("id").loc[i, "identificacao"]
+                or f"Execução {i}",
+        )
+        pontos = persistencia.carregar_pontos(execucao_escolhida)
+        sorteados = pontos[pontos["selecionado"]]
+        excluidos = pontos[~pontos["selecionado"]]
+        st.caption(f"{len(sorteados)} ponto(s) sorteado(s), "
+                   f"{len(excluidos)} excluído(s) por revisão manual.")
+        if not sorteados.empty:
+            st.dataframe(pd.json_normalize(sorteados["dados"]),
+                        hide_index=True, use_container_width=True, height=200)
+        if not excluidos.empty:
+            st.markdown("**Excluídos por revisão manual:**")
+            detalhe_excluidos = pd.concat([
+                pd.json_normalize(excluidos["dados"]),
+                pd.json_normalize(excluidos["revisao_manual"]),
+            ], axis=1)
+            st.dataframe(detalhe_excluidos, hide_index=True, use_container_width=True, height=160)
+
+
 # ── Passo 1: cadastro do município ────────────────────────────────────────────
 _passo(
     "Passo 1 — Cadastro do município",
@@ -603,6 +643,11 @@ _passo(
 _fingerprint_base = (len(base), round(float(base["_lat"].sum(skipna=True)), 3),
                      round(float(base["_lon"].sum(skipna=True)), 3))
 
+# Capturado aqui, antes do `base.drop(...)` mais abaixo, porque depois dele os índices
+# excluídos somem de `base` — sem isto, quem foi tirado por revisão manual e por quê
+# não sobrevive nem para a gravação em `amostragem_pontos.revisao_manual` no Passo 6.
+pontos_excluidos_manualmente: list[dict] = []
+
 if not tem_coordenadas:
     st.caption("Sem coordenadas válidas nesta base, esta etapa fica indisponível.")
 elif st.button("🔎 Identificar áreas especiais (OpenStreetMap)", key="am_buscar_areas"):
@@ -700,6 +745,16 @@ if _areas_validas:
                 alvo=f"{municipio}/{uf}".strip("/"),
                 detalhe=f"{len(indices_excluir)} pontos",
             )
+            pontos_excluidos_manualmente = [
+                {
+                    "_id": base.loc[i, "_id"], "_logradouro": base.loc[i, "_logradouro"],
+                    "_bairro": base.loc[i, "_bairro"], "_classe": base.loc[i, "_classe"],
+                    "categoria": achados.loc[i, "_area_categoria"],
+                    "nome": achados.loc[i, "_area_nome"],
+                    "osm_url": achados.loc[i, "_area_url"],
+                }
+                for i in indices_excluir
+            ]
             base = base.drop(index=list(indices_excluir))
             tem_coordenadas = bool(base["_tem_coord"].any())
 
@@ -893,6 +948,25 @@ if st.button("🎲 Sortear amostra", type="primary", use_container_width=True):
                 alvo=f"{municipio}/{uf}".strip("/"),
                 detalhe=f"{resultado.total_amostra} de {resultado.total_parque} pontos",
             )
+            _usuario = usuario_atual()
+            execucao_id = persistencia.salvar_execucao(
+                resultado,
+                usuario_login=(_usuario.login if _usuario else None),
+                pontos_excluidos=pontos_excluidos_manualmente,
+            )
+            if execucao_id is None:
+                # Guardado na sessão, não exibido aqui: o `st.rerun()` logo abaixo troca
+                # de tela antes de qualquer `st.warning` chamado nesta passagem aparecer —
+                # mesma razão pela qual `SS["mensagem"]` (sucesso) já atravessa por sessão.
+                # Não interrompe o fluxo (xlsx/relatório seguem prontos em sessão), mas
+                # isto É o registro de durabilidade que motivou a persistência inteira —
+                # ao contrário da trilha de uso, uma falha aqui não pode passar em silêncio.
+                st.session_state["am_aviso_persistencia"] = (
+                    "⚠️ A amostra foi sorteada, mas não foi possível registrá-la no banco "
+                    "— ela só existe nesta sessão. Os downloads abaixo funcionam "
+                    "normalmente; se o banco estiver fora do ar, considere sortear de "
+                    "novo depois para ter um registro permanente."
+                )
             # Rerun em vez de seguir o script: a prévia do parque já foi desenhada
             # acima nesta passada (quando `resultado` ainda era None), e sem o rerun a
             # tela ficaria com dois mapas pesados até o próximo clique. A mensagem
@@ -912,6 +986,9 @@ resultado = st.session_state[SS["resultado"]]
 mensagem = st.session_state.pop(SS["mensagem"], None)
 if mensagem:
     st.success(mensagem)
+aviso_persistencia = st.session_state.pop("am_aviso_persistencia", None)
+if aviso_persistencia:
+    st.warning(aviso_persistencia)
 
 
 # ── Passo 7: resultado ────────────────────────────────────────────────────────
