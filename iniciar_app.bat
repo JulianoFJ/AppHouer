@@ -19,9 +19,9 @@ if %errorlevel% neq 0 (
 
 :: 2. Verificacao de Modelos Treinados
 echo [PASSO 2/4] Validando inteligencia artificial...
-if not exist "modelo_w_limpo.pkl" (
+if not exist "ml\modelo_w_limpo.pkl" (
     echo [AVISO] Modelos nao encontrados. Iniciando treinamento...
-    py 02_treinar_modelo.py
+    py ml\02_treinar_modelo.py
     if %errorlevel% neq 0 (
         echo [ERRO] Falha no treinamento dos modelos.
         pause

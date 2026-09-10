@@ -135,9 +135,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Caminhos ──────────────────────────────────────────────────────────────────
-# Esta página vive em `paginas/`, mas os .pkl / .csv / .json originais estão
-# na raiz do projeto (junto com app.py). Por isso subimos um nível.
-PASTA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Esta página vive em `paginas/`, mas os .pkl / .csv / .json / .xlsx de origem estão
+# em `ml/`, na raiz do projeto (irmã de `paginas/`) — mesma pasta que `01_extrair_dados.py`
+# e `02_treinar_modelo.py` leem e escrevem, então mover um lado sem o outro quebra os dois.
+PASTA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'ml')
 FEATURES_PATH = os.path.join(PASTA, 'features.json')
 
 # ── Configurações ─────────────────────────────────────────────────────────────

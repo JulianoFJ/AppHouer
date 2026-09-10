@@ -426,39 +426,56 @@ def _origem_bdgd(col_esquerda, col_direita) -> tuple[pd.DataFrame | None, str, s
 # amostra sorteada sobrevive ao fim da sessão é o registro em si, não a capacidade de
 # baixar de novo; reconstruir os arquivos a partir do que foi persistido é um passo à
 # parte, se algum dia for preciso.
+#
+# Tudo dentro de um try/except: esta página funcionava inteira sem banco antes desta
+# seção existir, e uma falha aqui não pode derrubar Passo 1-7 — o mesmo motivo pelo
+# qual `persistencia.salvar_execucao` nunca levanta.
 with st.expander("📋 Execuções anteriores"):
-    execucoes = persistencia.listar_execucoes()
-    if execucoes.empty:
-        st.caption("Nenhuma execução registrada ainda.")
-    else:
-        st.dataframe(
-            execucoes.rename(columns={
-                "id": "ID", "criado_em": "Quando", "identificacao": "Município/UF",
-                "status": "Status", "total_amostra": "Amostra", "total_parque": "Parque",
-                "usuario": "Quem",
-            }),
-            hide_index=True, use_container_width=True, height=180,
-        )
-        execucao_escolhida = st.selectbox(
-            "Ver pontos de", execucoes["id"],
-            format_func=lambda i: execucoes.set_index("id").loc[i, "identificacao"]
-                or f"Execução {i}",
-        )
-        pontos = persistencia.carregar_pontos(execucao_escolhida)
-        sorteados = pontos[pontos["selecionado"]]
-        excluidos = pontos[~pontos["selecionado"]]
-        st.caption(f"{len(sorteados)} ponto(s) sorteado(s), "
-                   f"{len(excluidos)} excluído(s) por revisão manual.")
-        if not sorteados.empty:
-            st.dataframe(pd.json_normalize(sorteados["dados"]),
-                        hide_index=True, use_container_width=True, height=200)
-        if not excluidos.empty:
-            st.markdown("**Excluídos por revisão manual:**")
-            detalhe_excluidos = pd.concat([
-                pd.json_normalize(excluidos["dados"]),
-                pd.json_normalize(excluidos["revisao_manual"]),
-            ], axis=1)
-            st.dataframe(detalhe_excluidos, hide_index=True, use_container_width=True, height=160)
+    try:
+        execucoes = persistencia.listar_execucoes()
+    except Exception as exc:
+        execucoes = None
+        st.caption(f"Histórico indisponível no momento ({exc}).")
+
+    if execucoes is not None:
+        if execucoes.empty:
+            st.caption("Nenhuma execução registrada ainda.")
+        else:
+            st.dataframe(
+                execucoes.rename(columns={
+                    "id": "ID", "criado_em": "Quando", "identificacao": "Município/UF",
+                    "status": "Status", "total_amostra": "Amostra", "total_parque": "Parque",
+                    "usuario": "Quem",
+                }),
+                hide_index=True, use_container_width=True, height=180,
+            )
+            rotulos_execucao = execucoes.set_index("id")["identificacao"]
+            execucao_escolhida = st.selectbox(
+                "Ver pontos de", execucoes["id"],
+                format_func=lambda i: rotulos_execucao.get(i) or f"Execução {i}",
+            )
+            try:
+                pontos = persistencia.carregar_pontos(execucao_escolhida)
+            except Exception as exc:
+                pontos = None
+                st.caption(f"Pontos desta execução indisponíveis no momento ({exc}).")
+
+            if pontos is not None:
+                sorteados = pontos[pontos["selecionado"]]
+                excluidos = pontos[~pontos["selecionado"]]
+                st.caption(f"{len(sorteados)} ponto(s) sorteado(s), "
+                           f"{len(excluidos)} excluído(s) por revisão manual.")
+                if not sorteados.empty:
+                    st.dataframe(pd.json_normalize(sorteados["dados"]),
+                                hide_index=True, use_container_width=True, height=200)
+                if not excluidos.empty:
+                    st.markdown("**Excluídos por revisão manual:**")
+                    detalhe_excluidos = pd.concat([
+                        pd.json_normalize(excluidos["dados"]),
+                        pd.json_normalize(excluidos["revisao_manual"]),
+                    ], axis=1)
+                    st.dataframe(detalhe_excluidos, hide_index=True,
+                                use_container_width=True, height=160)
 
 
 # ── Passo 1: cadastro do município ────────────────────────────────────────────

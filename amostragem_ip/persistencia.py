@@ -106,22 +106,29 @@ def salvar_execucao(resultado, *, usuario_login: str | None,
                 },
             ).scalar_one()
 
-            for linha in linhas_pontos:
+            if linhas_pontos:
+                # Um só `execute` com a lista inteira de parâmetros: o SQLAlchemy manda
+                # como executemany, uma via de ida e volta ao Postgres em vez de uma por
+                # ponto — uma amostra de algumas centenas de pontos não deveria custar
+                # centenas de round-trips na mesma transação.
                 conexao.execute(
                     text(
                         "insert into amostragem_pontos "
                         "(execucao_id, dados, selecionado, revisao_manual) "
                         "values (:execucao_id, :dados, :selecionado, :revisao_manual)"
                     ),
-                    {
-                        "execucao_id": execucao_id,
-                        "dados": _dumps(linha["dados"]),
-                        "selecionado": linha["selecionado"],
-                        "revisao_manual": (
-                            _dumps(linha["revisao_manual"])
-                            if linha["revisao_manual"] is not None else None
-                        ),
-                    },
+                    [
+                        {
+                            "execucao_id": execucao_id,
+                            "dados": _dumps(linha["dados"]),
+                            "selecionado": linha["selecionado"],
+                            "revisao_manual": (
+                                _dumps(linha["revisao_manual"])
+                                if linha["revisao_manual"] is not None else None
+                            ),
+                        }
+                        for linha in linhas_pontos
+                    ],
                 )
         return execucao_id
     except Exception as erro:                     # noqa: BLE001 — ver docstring do módulo

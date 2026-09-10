@@ -140,11 +140,20 @@ def _escrever_csv(linhas: list[list]) -> None:
 
 
 def _escrever_pg(linhas: list[list]) -> bool:
-    """`True` se o lote foi gravado. `""` vira `None`: a planilha/CSV toleram string
-    vazia num campo numérico, a coluna `segundos_sessao` (Float) do Postgres não."""
+    """
+    `True` se o lote foi gravado. Só `segundos_sessao` troca `""` por `None`: a
+    planilha/CSV toleram string vazia num campo numérico, o Float do Postgres não.
+    As demais colunas (`sessao_id` incluído) ficam com a string vazia como está —
+    convertê-las para NULL faria `eventos["sessao_id"].astype(str).str.len() > 0`
+    (o filtro de sessão anônima em `paginas/administracao.py`) parar de reconhecer
+    esses eventos como sem sessão, já que `str(None)` também tem comprimento > 0.
+    """
     try:
         registros = [
-            {col: (valor if valor != "" else None) for col, valor in zip(COLUNAS, linha)}
+            {
+                col: (None if col == "segundos_sessao" and valor == "" else valor)
+                for col, valor in zip(COLUNAS, linha)
+            }
             for linha in linhas
         ]
         with db.engine().begin() as conexao:

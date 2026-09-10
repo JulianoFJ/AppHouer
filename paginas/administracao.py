@@ -75,27 +75,41 @@ with aba_usuarios:
                         horizontal=False)
         senha_manual = st.text_input("Senha (se manual)", type="password",
                                      help="Mínimo de 10 caracteres.")
+        confirmar_existente = st.checkbox(
+            "Sei que este login pode já existir e quero sobrescrever nome/perfil/senha",
+            help="Só precisa marcar se o login digitado já estiver na tabela acima — "
+                 "evita trocar a senha de outra pessoa por um login digitado errado.",
+        )
         emitir = st.form_submit_button("Salvar", type="primary")
 
     if emitir:
         erros = []
         login_norm = (novo_login or "").strip().lower()
+        era_existente = login_norm in cadastrados
         if not login_norm or " " in login_norm:
             erros.append("Login vazio ou com espaço.")
         if modo == "Definir manualmente" and len(senha_manual or "") < 10:
             erros.append("Senha manual com menos de 10 caracteres.")
+        if era_existente and not confirmar_existente:
+            erros.append(
+                f"O login `{login_norm}` já existe. Se é isso mesmo — troca de senha ou "
+                "de perfil — marque a confirmação acima e clique em Salvar de novo."
+            )
 
         if erros:
             for e in erros:
                 st.error(e)
         else:
-            era_existente = login_norm in cadastrados
             senha = (_secrets.token_urlsafe(16) if modo == "Sortear uma forte"
                      else senha_manual)
             nome_norm = (novo_nome or login_norm).strip()
-            with st.spinner("Derivando o hash (PBKDF2, 600 mil iterações) e gravando..."):
-                autenticacao.criar_ou_atualizar_usuario(
-                    login_norm, nome_norm, novo_perfil, senha)
+            try:
+                with st.spinner("Derivando o hash (PBKDF2, 600 mil iterações) e gravando..."):
+                    autenticacao.criar_ou_atualizar_usuario(
+                        login_norm, nome_norm, novo_perfil, senha)
+            except Exception as exc:
+                st.error(f"Falha ao gravar no banco: {exc}")
+                st.stop()
 
             st.success(
                 f"Usuário `{login_norm}` {'atualizado' if era_existente else 'cadastrado'} "
@@ -125,12 +139,20 @@ with aba_usuarios:
         with c1:
             if ativo_hoje:
                 if st.button("Desativar", type="secondary"):
-                    autenticacao.definir_ativo(alvo, False)
+                    try:
+                        autenticacao.definir_ativo(alvo, False)
+                    except Exception as exc:
+                        st.error(f"Falha ao gravar no banco: {exc}")
+                        st.stop()
                     auditoria.registrar_acao("acesso_revogado", alvo=alvo)
                     st.rerun()
             else:
                 if st.button("Reativar", type="primary"):
-                    autenticacao.definir_ativo(alvo, True)
+                    try:
+                        autenticacao.definir_ativo(alvo, True)
+                    except Exception as exc:
+                        st.error(f"Falha ao gravar no banco: {exc}")
+                        st.stop()
                     auditoria.registrar_acao("acesso_reativado", alvo=alvo)
                     st.rerun()
         with c2:

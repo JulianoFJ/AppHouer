@@ -22,7 +22,7 @@ import pandas as pd
 import numpy as np
 import json
 
-PASTA = os.path.join(os.path.dirname(__file__), '..')
+PASTA = os.path.join(os.path.dirname(__file__), '..', 'ml')
 
 # â”€â”€ Carrega artefatos â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 with open(os.path.join(PASTA, 'features_limpo.json'), encoding='utf-8') as f:

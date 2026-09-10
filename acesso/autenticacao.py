@@ -250,19 +250,54 @@ def _expirada(u: Usuario) -> bool:
     return datetime.now(timezone.utc) - u.autenticado_em > timedelta(hours=horas)
 
 
+_CHAVE_ULTIMA_VERIFICACAO = "_acesso_ultima_verificacao"
+INTERVALO_VERIFICACAO_S = 60
+
+# Revisão de 10/09/2026, achado em revisão de segurança: revogar ou rebaixar alguém pela
+# tela de administração (`definir_ativo`/`criar_ou_atualizar_usuario`) só grava no
+# Postgres — não existe mais o reinício de processo que o Streamlit Cloud fazia ao
+# salvar o secrets (que derrubava toda sessão aberta de graça). Sem isto, uma conta
+# desativada ou rebaixada de admin continuaria válida em qualquer aba já logada até a
+# sessão expirar sozinha (`expiracao_horas`, padrão 12h).
+def _ainda_valido(u: Usuario) -> bool:
+    """
+    Confere no banco se a conta segue ativa e com o mesmo perfil — no máximo uma vez a
+    cada `INTERVALO_VERIFICACAO_S`, não a cada rerun (cada clique do Streamlit reexecuta
+    o script inteiro; consultar o banco em todos eles custaria uma ida ao Postgres por
+    interação). Falha de conexão não derruba quem já estava logado — mesma filosofia de
+    "nunca derrubar o app" da auditoria: perder a reverificação por um instante é melhor
+    que expulsar todo mundo porque o banco piscou.
+    """
+    agora = time.time()
+    if agora - st.session_state.get(_CHAVE_ULTIMA_VERIFICACAO, 0.0) < INTERVALO_VERIFICACAO_S:
+        return True
+    st.session_state[_CHAVE_ULTIMA_VERIFICACAO] = agora
+    try:
+        with db.engine().connect() as conexao:
+            linha = conexao.execute(
+                text("select perfil, ativo from users where login = :login"),
+                {"login": u.login},
+            ).mappings().first()
+    except Exception:
+        return True
+    return linha is not None and bool(linha["ativo"]) and linha["perfil"] == u.perfil
+
+
 def usuario_atual() -> Usuario | None:
-    """Usuário da sessão, ou None se não autenticado ou expirado."""
+    """Usuário da sessão, ou None se não autenticado, expirado, ou revogado/alterado."""
     u = st.session_state.get(_CHAVE_SESSAO)
     if u is None:
         return None
-    if _expirada(u):
+    if _expirada(u) or not _ainda_valido(u):
         st.session_state.pop(_CHAVE_SESSAO, None)
+        st.session_state.pop(_CHAVE_ULTIMA_VERIFICACAO, None)
         return None
     return u
 
 
 def encerrar_sessao() -> Usuario | None:
     """Derruba a sessão e devolve quem estava logado, para o log registrar a saída."""
+    st.session_state.pop(_CHAVE_ULTIMA_VERIFICACAO, None)
     return st.session_state.pop(_CHAVE_SESSAO, None)
 
 
@@ -385,6 +420,7 @@ def _tela_login() -> None:
         return
 
     st.session_state[_CHAVE_SESSAO] = u
+    st.session_state[_CHAVE_ULTIMA_VERIFICACAO] = time.time()
     st.session_state.pop(_CHAVE_TENTATIVAS, None)
     auditoria.registrar_evento("login", usuario=u)
     st.rerun()

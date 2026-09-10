@@ -1,10 +1,13 @@
+import os
 import joblib, pandas as pd, numpy as np, json
 
-with open('features.json', encoding='utf-8') as f:
+PASTA = os.path.join(os.path.dirname(__file__), '..', 'ml')
+
+with open(os.path.join(PASTA, 'features.json'), encoding='utf-8') as f:
     meta = json.load(f)
 
-modelo_uo   = joblib.load('modelo_uo.pkl')
-modelo_emed = joblib.load('modelo_emed.pkl')
+modelo_uo   = joblib.load(os.path.join(PASTA, 'modelo_uo.pkl'))
+modelo_emed = joblib.load(os.path.join(PASTA, 'modelo_emed.pkl'))
 num_ok = meta['features_numericas']
 cat_ok = meta['features_categoricas']
 
