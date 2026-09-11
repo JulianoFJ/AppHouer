@@ -1,15 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import json
 import os
 import io
-import joblib
-import json
 from geopy.geocoders import GoogleV3
 import plotly.express as px
 import plotly.graph_objects as go
-from fpdf import FPDF
 
 def get_google_maps_api_key():
     """Lê a chave da API via Streamlit Secrets ou variável de ambiente."""
@@ -134,392 +130,58 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Caminhos ──────────────────────────────────────────────────────────────────
-# Esta página vive em `paginas/`, mas os .pkl / .csv / .json / .xlsx de origem estão
-# em `ml/`, na raiz do projeto (irmã de `paginas/`) — mesma pasta que `01_extrair_dados.py`
-# e `02_treinar_modelo.py` leem e escrevem, então mover um lado sem o outro quebra os dois.
-PASTA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'ml')
-FEATURES_PATH = os.path.join(PASTA, 'features.json')
+# ── Previsão de iluminação (pacote de domínio) ────────────────────────────────
+# Carregamento de modelos, regras de engenharia e geração de PDF vivem em
+# `previsao_iluminacao/` (extraído de dentro desta página em 10/09/2026) — a página
+# fica só com a UI. Cache (`st.cache_resource`/`st.cache_data`) continua aqui: o
+# pacote não importa Streamlit, mesma convenção de `amostragem_ip`/`cadastro_ip`.
+from previsao_iluminacao import constantes as _pi_const
+from previsao_iluminacao import historico as _pi_historico
+from previsao_iluminacao import modelos as _pi_modelos
+from previsao_iluminacao import planilhas as _pi_planilhas
+from previsao_iluminacao import relatorio as _pi_relatorio
 
-# ── Configurações ─────────────────────────────────────────────────────────────
-FORNECEDORES = ['LEDSTAR', 'SX LIGHTING', 'TECNOWATT']
-CORES = {'LEDSTAR': '#00A9E0', 'SX LIGHTING': '#1B3664', 'TECNOWATT': '#64748b'}
-
-TARGETS_MAP = {
-    'lmed': 'Luminância Média',
-    'uo': 'Fator de Uniformidade',
-    'ul': 'Uniformidade Longitudinal',
-    'emed': 'Iluminância Média',
-    'emin': 'Iluminância mínima horizontal E (lux)',
-    'w': 'Potência (W)'
-}
-UNITS_MAP = {
-    'lmed': 'cd/m²', 'uo': '', 'ul': '', 'emed': 'lux', 'emin': 'lux', 'w': 'W'
-}
-
-# Projeção física de cada classificação de braço (metros) — tabela padrão interna
-BRACOS_PROJECAO = {
-    'Curto I':  1.2,
-    'Curto II': 1.4,
-    'Médio I':  1.8,
-    'Médio II': 2.4,
-    'Longo I':  2.8,
-    'Longo II': 3.5,
-}
-BRACOS_ORDENADOS = sorted(BRACOS_PROJECAO.items(), key=lambda x: x[1])
-
-def projecao_para_braco(proj_m: float) -> str:
-    """Retorna a classificação de braço mais próxima da projeção em metros."""
-    return min(BRACOS_PROJECAO, key=lambda b: abs(BRACOS_PROJECAO[b] - float(proj_m)))
-
-# ── Template de Exportação (Colunas D a DM das planilhas originais) ─────────────
-TEMPLATE_COLUMNS = [
-    'ID', 'Padrão', 'Logradouro', 'latitude', 'longitude', 'Classificação viária',
-    'Classificação ciclovia', 'Classificação pedonal', 'Tipo de lâmpada',
-    'Potencia da lâmpada', 'Potência Reator', 'Potencia 2o nivel', 'POT TOTAL MALHA',
-    'Faixas de Rodagem', 'Largura Passeio 1', 'Largura Via 1', 'largura Passeio Central 1',
-    'largura Passeio Central 2', 'Largura Via 2', 'largura Passeio 2',
-    'largura Canteiro Central', 'largura Ciclovia 1', 'largura Ciclovia 2',
-    'estacionamento 1', 'estacionamento 2', 'posteacao', 'Tipo de estrutura',
-    'distancia entre postes', 'altura da luminaria', 'qtd de Lampadas IP Princ',
-    'distancia Poste a via', 'projecao do braço', 'Pendor', 'Altura de Instalação',
-    'Projeção Vertical', 'Exclusivo', 'Quantidade de pontos inspecionados IP Veic',
-    'qtd de Lampadas IP 2o nivel', 'Tipo de posteação 2o nivel', 'Distanciamento 2o nivel',
-    'Altura da luminaria 2o nivel', 'Projecao 2o nivel', 'Distancia poste-via 2o nivel',
-    'Quantidade de pontos inspecionados IP Sec', 'informacoes Adicionais', 'Emed - Norma',
-    'U - Norma', 'Luminância Média Exigida', 'Uo Uniformidade Global Exigida',
-    'Uniformidade Longitudinal Exigida', 'Incremento Linear Exigido',
-    'Atendimento pleno à norma', 'Excesso de iluminância média IV',
-    'Excesso de Uniformidade IV', 'Excesso de luminância média IV',
-    'Iluminância Média', 'Fator de Uniformidade', 'Luminância Média',
-    'Uniformidade Longitudinal', 'Incremento Linear (TI)', 'EIR',
-    'ATENDE TUDO - RUA SIMU', 'Atende à Iluminância Média',
-    'Atende à Uniformidade Global Miníma', 'Atende à Luminância Média',
-    'Classe IV', 'Classe IP', 'Excesso de iluminância média P1', 'Iluminância Média.1',
-    'Iluminância mínima horizontal E (lux)', 'Iluminância Média (Exigida)',
-    'Iluminância mínima horizontal E (lux).1', 'Atende à NBR 5101 - TUDO SIMU',
-    'Atende à Iluminância Média.1', 'Atende à Iluminância mínima horizontal',
-    'Classe IP.1', 'Excesso de iluminância média P2', 'Iluminância Média.2',
-    'Iluminância mínima horizontal E (lux).2', 'Iluminância Média (Exigida).1',
-    'Iluminância mínima horizontal E (lux) exigida', 'Atende à NBR 5101 - TUDO SIMU P2',
-    'Atende à Iluminância Média.2', 'Atende à Iluminância mínima horizontal.1',
-    'Fornecedor', 'Código Luminária 1', 'Luminária Simulada (IP Principal)',
-    'Código Luminária 2', 'Luminária Simulada (IP Secundário)',
-    'Pontos por poste (IP Principal)', ' Potência simulada - IP Principal (W)',
-    ' Potência simulada - IP Secundário (W)', 'Fluxo Luminoso - IP Principal (lm)',
-    'Fluxo Luminoso - IP Secundário (lm)', 'Ângulo antigo', 'Ângulo Simulado',
-    'Braço Antigo', 'Braço Novo', 'Projeção com alteração',
-    'Altura de luminária com alteração', 'Correção de Ponto Escuro (CPE)',
-    'Quantidade de pontos adicionados para via de veículo',
-    'Quantidade de pontos adicionados para via de pedestres',
-    'Observação CPE  (Reduçao entre postes e/ou Tipo de Posteação)',
-    'obs conferência', 'rev conferência', 'IP PRINC SIM', 'IP SEC SIM',
-    'TOTAL SIMULADO', 'Eficientização', 'Simulação', 'Conferência ',
-    'Considerar na Extrapolação', 'Inspeção'
-]
-
-# Mapeamento de inputs da planilha para os nomes internos do modelo
-MAPEAMENTO_COLS = {
-    'Classificacao (M/C/P)': 'Classificação viária',
-    'Classificacao': 'Classificação viária',
-    'Classificao viria': 'Classificação viária',
-    'Altura de Instalação': 'Altura de Instalação',
-    'Altura de Instalao': 'Altura de Instalação',
-    'altura da luminaria': 'altura da luminaria',
-    'distancia entre poste': 'distancia entre postes',
-    'distancia entre postes': 'distancia entre postes',
-    'Largura da Via 1': 'Largura Via 1',
-    'Largura Via 1': 'Largura Via 1',
-    'projecao do braço': 'projecao do braço',
-    'projecao do brao': 'projecao do braço',
-    'Braço Novo': 'Braço Novo',
-    'Brao Novo': 'Braço Novo',
-    'Posteação': 'posteacao',
-    'posteacao': 'posteacao',
-    'Potencia Atual (W)': 'Potencia da lâmpada',
-    'Potencia da lmpada': 'Potencia da lâmpada',
-    'Tipo de lmpada': 'Tipo de lâmpada',
-    'tipo de lampada': 'Tipo de lâmpada',
-    'Tipo de lampada atual': 'Tipo de lâmpada',
-    'Potencia Atual': 'Potencia da lâmpada',
-    'Potência Atual (W)': 'Potencia da lâmpada',
-    'Altura de luminária com alteração': 'Altura de luminária com alteração',
-    'Projeção com alteração': 'Projeção com alteração',
-    'Faixas de Rodagem': 'Faixas de Rodagem',
-    'Largura Via 1': 'Largura Via 1',
-    'Largura Via 2': 'Largura Via 2',
-    'Largura Passeio 1': 'Largura Passeio 1',
-    'largura Passeio 2': 'largura Passeio 2',
-    'largura Canteiro Central': 'largura Canteiro Central',
-    'distancia Poste a via': 'distancia Poste a via',
-    'Tipo de estrutura': 'Tipo de estrutura'
-}
-
-# ── Tabela NBR 5101 – Requisitos Mínimos por Subclasse ─────────────────────────
-# Fonte: ABNT NBR 5101:2024
-# M = Luminância (cd/m²) | C/P = Iluminância (lux)
-NBR5101 = {
-    # Vias Motorizadas (Lmed em cd/m², Uo, Ul)
-    'M1': {'metricas': ['lmed','uo','ul','w'], 'lmed': 2.0, 'uo': 0.40, 'ul': 0.70},
-    'M2': {'metricas': ['lmed','uo','ul','w'], 'lmed': 1.5, 'uo': 0.40, 'ul': 0.70},
-    'M3': {'metricas': ['lmed','uo','ul','w'], 'lmed': 1.0, 'uo': 0.40, 'ul': 0.60},
-    'M4': {'metricas': ['lmed','uo','ul','w'], 'lmed': 0.75,'uo': 0.40, 'ul': 0.60},
-    'M5': {'metricas': ['lmed','uo','ul','w'], 'lmed': 0.50,'uo': 0.35, 'ul': 0.40},
-    'M6': {'metricas': ['lmed','uo','ul','w'], 'lmed': 0.30,'uo': 0.35, 'ul': 0.40},
-    # Áreas de Conflito (Emed em lux, Uo)
-    'C0': {'metricas': ['emed','uo','w'], 'emed': 50.0, 'uo': 0.40},
-    'C1': {'metricas': ['emed','uo','w'], 'emed': 30.0, 'uo': 0.40},
-    'C2': {'metricas': ['emed','uo','w'], 'emed': 20.0, 'uo': 0.40},
-    'C3': {'metricas': ['emed','uo','w'], 'emed': 15.0, 'uo': 0.35},
-    'C4': {'metricas': ['emed','uo','w'], 'emed': 10.0, 'uo': 0.35},
-    'C5': {'metricas': ['emed','uo','w'], 'emed':  5.0, 'uo': 0.35},
-    # Vias Pedonais/Ciclovias (Emed e Emin em lux)
-    'P1': {'metricas': ['emed','emin','w'], 'emed': 20.0, 'emin': 7.5},
-    'P2': {'metricas': ['emed','emin','w'], 'emed': 15.0, 'emin': 5.0},
-    'P3': {'metricas': ['emed','emin','w'], 'emed': 10.0, 'emin': 3.0},
-    'P4': {'metricas': ['emed','emin','w'], 'emed':  7.5, 'emin': 1.5},
-    'P5': {'metricas': ['emed','emin','w'], 'emed':  5.0, 'emin': 1.0},
-    'P6': {'metricas': ['emed','emin','w'], 'emed':  3.0, 'emin': 0.6},
-}
+FORNECEDORES = _pi_const.FORNECEDORES
+CORES = _pi_const.CORES
+TARGETS_MAP = _pi_const.TARGETS_MAP
+UNITS_MAP = _pi_const.UNITS_MAP
+BRACOS_PROJECAO = _pi_const.BRACOS_PROJECAO
+BRACOS_ORDENADOS = _pi_const.BRACOS_ORDENADOS
+projecao_para_braco = _pi_modelos.projecao_para_braco
+TEMPLATE_COLUMNS = _pi_const.TEMPLATE_COLUMNS
+MAPEAMENTO_COLS = _pi_const.MAPEAMENTO_COLS
+NBR5101 = _pi_const.NBR5101
 
 # ── Carrega modelos ───────────────────────────────────────────────────────────
 @st.cache_resource
 def carregar_modelos(suffix=""):
-    meta_path = os.path.join(PASTA, f'features{suffix}.json')
-    meta = {}
-    if os.path.exists(meta_path):
-        with open(meta_path, encoding='utf-8') as f:
-            meta = json.load(f)
-
-    modelos = {}
-    for key in ['lmed', 'uo', 'ul', 'emed', 'emin', 'w']:
-        path = os.path.join(PASTA, f'modelo_{key}{suffix}.pkl')
-        if os.path.exists(path):
-            modelos[key] = joblib.load(path)
-    return modelos, meta
+    return _pi_modelos.carregar_modelos(suffix)
 
 @st.cache_resource
 def carregar_classificadores(suffix=""):
-    """Carrega modelo_cpe e modelo_braco se existirem."""
-    clf_cpe   = None
-    clf_braco = None
-    path_cpe   = os.path.join(PASTA, f'modelo_cpe{suffix}.pkl')
-    path_braco = os.path.join(PASTA, f'modelo_braco{suffix}.pkl')
-    if os.path.exists(path_cpe):
-        clf_cpe = joblib.load(path_cpe)
-    if os.path.exists(path_braco):
-        clf_braco = joblib.load(path_braco)
-    return clf_cpe, clf_braco
+    return _pi_modelos.carregar_classificadores(suffix)
 
-def prever_metricas_com_dependencia_w(df_base: pd.DataFrame, modelos: dict, metricas: list, meta: dict):
-    """Prevê métricas respeitando dependência de W (emed/emin treinados com coluna de potência)."""
-    preds = {}
-    w_col = meta.get('feature_w_col', 'Potencia simulada - IP Principal (W)')
-    dependem_w = set(meta.get('modelos_dependem_de_w', []))
+prever_metricas_com_dependencia_w = _pi_modelos.prever_metricas_com_dependencia_w
+analisar_melhorias = _pi_modelos.analisar_melhorias
 
-    # 1) Prevê W primeiro quando necessário
-    if 'w' in metricas and 'w' in modelos:
-        preds_w = modelos['w'].predict(df_base)
-        preds['w'] = np.maximum(preds_w, 0)
-    elif 'w' in metricas:
-        preds['w'] = np.array([np.nan] * len(df_base))
-
-    # 2) Prevê demais métricas
-    for m in metricas:
-        if m == 'w':
-            continue
-        if m not in modelos:
-            preds[m] = np.array([np.nan] * len(df_base))
-            continue
-        try:
-            if m in dependem_w:
-                df_m = df_base.copy()
-                if w_col not in df_m.columns:
-                    df_m[w_col] = preds.get('w', np.array([np.nan] * len(df_base)))
-                p = modelos[m].predict(df_m)
-            else:
-                p = modelos[m].predict(df_base)
-            preds[m] = np.maximum(p, 0)
-        except Exception:
-            preds[m] = np.array([np.nan] * len(df_base))
-
-    return preds
-
-# ── Carrega banco de dados de luminarias ────────────────────────────────────
 @st.cache_data
 def carregar_banco_luminarias():
-    """Lê a aba 'Banco de dados' das planilhas e retorna DataFrame com Fornecedor, Potência e Valor."""
-    dfs = []
-    for arq in os.listdir(PASTA):
-        if not arq.endswith('.xlsx'):
-            continue
-        try:
-            xl = pd.ExcelFile(os.path.join(PASTA, arq), engine='openpyxl')
-            aba = next((n for n in xl.sheet_names if 'banco' in n.lower()), None)
-            if not aba:
-                continue
-            df_raw = pd.read_excel(os.path.join(PASTA, arq), sheet_name=aba, header=1)
-            df_raw = df_raw.dropna(how='all').dropna(axis=1, how='all')
-            # A primeira linha contém os nomes reais
-            df_raw.columns = df_raw.iloc[0]
-            df_raw = df_raw[1:].reset_index(drop=True)
-            # Padroniza nomes das colunas relevantes
-            col_forn = next((c for c in df_raw.columns if 'forn' in str(c).lower()), None)
-            col_pot  = next((c for c in df_raw.columns if 'pot' in str(c).lower() and '[w]' in str(c).lower()), None)
-            col_lum  = next((c for c in df_raw.columns if 'lumin' in str(c).lower() and 'cod' not in str(c).lower() and 'consider' not in str(c).lower()), None)
-            col_val  = next((c for c in df_raw.columns if str(c).strip().lower() == 'valor'), None)
-            if not all([col_forn, col_pot, col_val]):
-                continue
-            df_sel = df_raw[[col_forn, col_pot, col_val]].copy()
-            if col_lum:
-                df_sel['Luminaria'] = df_raw[col_lum]
-            df_sel.columns = ['Fornecedor', 'Potencia_W', 'Valor_R$'] + (['Luminaria'] if col_lum else [])
-            df_sel = df_sel[df_sel['Fornecedor'].isin(['LEDSTAR', 'SX LIGHTING', 'TECNOWATT'])]
-            df_sel['Potencia_W'] = pd.to_numeric(df_sel['Potencia_W'], errors='coerce')
-            df_sel['Valor_R$']   = pd.to_numeric(df_sel['Valor_R$'],   errors='coerce')
-            df_sel = df_sel.dropna(subset=['Potencia_W', 'Valor_R$'])
-            dfs.append(df_sel)
-        except Exception:
-            continue
-    if dfs:
-        return pd.concat(dfs).drop_duplicates().reset_index(drop=True)
-    return pd.DataFrame(columns=['Fornecedor', 'Potencia_W', 'Valor_R$'])
+    return _pi_historico.carregar_banco_luminarias()
 
-def buscar_custo(banco: pd.DataFrame, fornecedor: str, potencia_w: float):
-    """Retorna (luminaria, potencia_real, valor) da luminaria mais próxima em potência."""
-    sub = banco[banco['Fornecedor'] == fornecedor].copy()
-    if sub.empty or potencia_w is None:
-        return None, None, None
-    idx_min = (sub['Potencia_W'] - potencia_w).abs().idxmin()
-    row = sub.loc[idx_min]
-    lum = row.get('Luminaria', '') if 'Luminaria' in sub.columns else ''
-    return lum, row['Potencia_W'], row['Valor_R$']
-
-# ── Carrega banco de dados de luminarias ────────────────────────────────────
+buscar_custo = _pi_historico.buscar_custo
 banco_luminarias = carregar_banco_luminarias()
 
 @st.cache_data
 def carregar_media_historica():
-    """Lê o dataset.csv original e calcula a média de potência por classe para comparação."""
-    caminho = os.path.join(PASTA, 'dataset.csv')
-    if not os.path.exists(caminho):
-        return pd.DataFrame(columns=['Classe_Resumo', 'Média Histórica (W)'])
-    try:
-        df_hist = pd.read_csv(caminho)
-        # Tenta achar colunas
-        col_classe = next((c for c in df_hist.columns if 'classifica' in c.lower() and 'vi' in c.lower()), None)
-        col_pot = next((c for c in df_hist.columns if 'potencia' in c.lower() and '(w)' in c.lower()), None)
-        if not col_classe or not col_pot:
-            return pd.DataFrame(columns=['Classe_Resumo', 'Média Histórica (W)'])
-        
-        df_hist['Classe_Resumo'] = df_hist[col_classe].fillna('N/A').astype(str).str.upper()
-        df_hist[col_pot] = pd.to_numeric(df_hist[col_pot], errors='coerce')
-        medias = df_hist.groupby('Classe_Resumo')[col_pot].mean().reset_index()
-        medias.rename(columns={col_pot: 'Média Histórica (W)'}, inplace=True)
-        return medias
-    except Exception:
-        return pd.DataFrame(columns=['Classe_Resumo', 'Média Histórica (W)'])
+    return _pi_historico.carregar_media_historica()
 
 medias_historicas = carregar_media_historica()
 
-@st.cache_data
-def carregar_regras_braco_novo():
-    """Aprende padrão de Braço Novo com base histórica (classe, largura e altura)."""
-    caminho = os.path.join(PASTA, 'dataset.csv')
-    vazio = pd.DataFrame(columns=['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R', 'Braco_Recomendado'])
-    vazio_classe = pd.DataFrame(columns=['Classe_Prefixo', 'Braco_Recomendado'])
-    if not os.path.exists(caminho):
-        return vazio, vazio_classe
-    try:
-        df = pd.read_csv(caminho)
-        cols_req = ['Classificação viária', 'Largura Via 1', 'altura da luminaria', 'distancia entre postes', 'Braço Novo']
-        if any(c not in df.columns for c in cols_req):
-            return vazio, vazio_classe
-        d = df[cols_req].copy()
-        d = d.dropna(subset=['Classificação viária', 'Largura Via 1', 'altura da luminaria', 'Braço Novo'])
-        if d.empty:
-            return vazio, vazio_classe
-        d['Classe_Prefixo'] = d['Classificação viária'].astype(str).str.upper().str[:1]
-        d = d[d['Classe_Prefixo'].isin(['M', 'C', 'P'])]
-        d['Largura_R'] = pd.to_numeric(d['Largura Via 1'], errors='coerce').round(1)
-        d['Altura_R'] = pd.to_numeric(d['altura da luminaria'], errors='coerce').round(1)
-        d['Dist_R'] = pd.to_numeric(d['distancia entre postes'], errors='coerce').round(1)
-        d = d.dropna(subset=['Largura_R', 'Altura_R', 'Dist_R'])
-        if d.empty:
-            return vazio, vazio_classe
-        agg = (d.groupby(['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R', 'Braço Novo'])
-                 .size().reset_index(name='n')
-                 .sort_values('n', ascending=False))
-        regras_finas = (agg.drop_duplicates(['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R'])
-                          .rename(columns={'Braço Novo': 'Braco_Recomendado'})
-                          [['Classe_Prefixo', 'Largura_R', 'Altura_R', 'Dist_R', 'Braco_Recomendado']])
-        agg_classe = (d.groupby(['Classe_Prefixo', 'Braço Novo'])
-                        .size().reset_index(name='n')
-                        .sort_values('n', ascending=False))
-        regras_classe = (agg_classe.drop_duplicates(['Classe_Prefixo'])
-                           .rename(columns={'Braço Novo': 'Braco_Recomendado'})
-                           [['Classe_Prefixo', 'Braco_Recomendado']])
-        return regras_finas, regras_classe
-    except Exception:
-        return vazio, vazio_classe
+formatar_resultado_template = _pi_planilhas.formatar_resultado_template
+formatar_tabela_resultado = _pi_planilhas.formatar_tabela_resultado
+formatar_tabela_dinamica = _pi_planilhas.formatar_tabela_dinamica
 
-def sugerir_braco_novo(subclasse, largura_via1, altura_lum, dist_postes,
-                       regras_finas, regras_classe, clf_braco=None,
-                       tipo_estrutura='Braço', posteacao='Unilateral',
-                       dist_poste_via=0.5, faixas=2, largura_via2=0.0,
-                       passeio1=0.0, passeio2=0.0, canteiro=0.0):
-    """Sugere Braço Novo: ML (se disponível) → vizinhança histórica → fallback por classe."""
-
-    # 1) Classificador ML
-    if clf_braco is not None:
-        try:
-            row = pd.DataFrame([{
-                'Faixas de Rodagem':      faixas,
-                'Largura Via 1':          largura_via1,
-                'Largura Via 2':          largura_via2,
-                'Largura Passeio 1':      passeio1,
-                'largura Passeio 2':      passeio2,
-                'largura Canteiro Central': canteiro,
-                'altura da luminaria':    altura_lum,
-                'projecao do braço':      1.5,   # valor neutro — não afeta classificação
-                'distancia entre postes': dist_postes,
-                'distancia Poste a via':  dist_poste_via,
-                'Classificação viária':   subclasse,
-                'Tipo de estrutura':      tipo_estrutura,
-                'posteacao':              posteacao,
-                'Fornecedor':             'LEDSTAR',  # neutro — modelo generaliza
-            }])
-            return clf_braco.predict(row)[0], 'ml'
-        except Exception:
-            pass
-
-    # 2) Vizinhança histórica
-    if not regras_finas.empty:
-        pref = str(subclasse).upper()[:1]
-        larg = round(float(largura_via1), 1)
-        alt  = round(float(altura_lum), 1)
-        dist = round(float(dist_postes), 1)
-        cand = regras_finas[regras_finas['Classe_Prefixo'] == pref].copy()
-        if not cand.empty:
-            cand['dist'] = (
-                (cand['Largura_R'] - larg).abs()
-                + (cand['Altura_R'] - alt).abs()
-                + 0.25 * (cand['Dist_R'] - dist).abs()
-            )
-            best = cand.sort_values('dist').iloc[0]
-            if best['dist'] <= 2.5:
-                return best['Braco_Recomendado'], 'historico'
-
-    # 3) Fallback por classe
-    if not regras_classe.empty:
-        pref = str(subclasse).upper()[:1]
-        cand_c = regras_classe[regras_classe['Classe_Prefixo'] == pref]
-        if not cand_c.empty:
-            return cand_c.iloc[0]['Braco_Recomendado'], 'historico'
-
-    return None, None
-
-regras_braco_finas, regras_braco_classe = carregar_regras_braco_novo()
+gerar_pdf = _pi_relatorio.gerar_pdf
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -661,456 +323,6 @@ with st.sidebar:
 
     st.markdown('### ⚡ Eficientização')
     potencia_atual = st.number_input('Potência Atual (W)', min_value=0.0, value=250.0, step=10.0, help="Potência da luminária instalada atualmente (ex: Sódio 250W, 400W)")
-
-def gerar_pdf(fornecedores, resultados, info_nbr, inputs, banco_luminarias, sugestoes, endereco="Não informado"):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    
-    # Cabeçalho
-    pdf.set_text_color(27, 54, 100) # Azul da paleta
-    pdf.cell(0, 10, "Relatório de Simulação de Iluminação Pública", ln=True, align='C')
-    pdf.set_font("Arial", "", 10)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 10, f"Gerado em: {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
-    pdf.ln(5)
-
-    # Endereço
-    pdf.set_font("Arial", "B", 11)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 10, "Localização do Projeto:", ln=True)
-    pdf.set_font("Arial", "", 10)
-    pdf.multi_cell(0, 7, endereco)
-    pdf.ln(5)
-
-    # Parâmetros de Entrada
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 10, "1. Parâmetros da Via:", ln=True)
-    pdf.set_font("Arial", "", 9)
-    
-    col_width = 45
-    for k, v in inputs.items():
-        if k == 'Fornecedor': continue
-        pdf.cell(col_width, 7, f"{k}: {v}", border=1)
-        if pdf.get_x() > 140: pdf.ln()
-    
-    if pdf.get_x() > 10: pdf.ln() # Garante que quebrou a linha no final do loop
-    pdf.ln(5)
-
-    # Tabela de Resultados
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 10, "2. Resultados Técnicos por Fornecedor:", ln=True)
-    pdf.set_font("Arial", "B", 9)
-    
-    # Header da Tabela
-    pdf.cell(35, 8, "Fornecedor", 1, 0, 'C')
-    pdf.cell(25, 8, "Pot. (W)", 1, 0, 'C')
-    pdf.cell(30, 8, "Ilum./Lum.", 1, 0, 'C')
-    pdf.cell(30, 8, "Uniform.", 1, 0, 'C')
-    pdf.cell(40, 8, "Status NBR", 1, 1, 'C')
-
-    pdf.set_font("Arial", "", 9)
-    for forn in fornecedores:
-        pot = resultados['w'].get(forn, 0)
-        m_v = resultados['lmed'].get(forn) if 'lmed' in resultados else resultados['emed'].get(forn)
-        u_v = resultados['uo'].get(forn) if 'uo' in resultados else 0
-        
-        status = "OK"
-        for m in info_nbr.get('metricas', []):
-            if m == 'w': continue
-            if m not in metricas_confiaveis: continue
-            val = resultados[m].get(forn)
-            req = info_nbr.get(m)
-            if val is not None and req is not None and val < req:
-                status = "Não Atende"
-                break
-
-        pdf.cell(35, 8, forn, 1)
-        pdf.cell(25, 8, f"{pot:.1f}", 1, 0, 'C')
-        pdf.cell(30, 8, f"{m_v:.2f}" if m_v else "-", 1, 0, 'C')
-        pdf.cell(30, 8, f"{u_v:.2f}" if u_v else "-", 1, 0, 'C')
-        pdf.cell(40, 8, status, 1, 1, 'C')
-    
-    pdf.ln(5)
-
-    # Custos e Eficiência
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 10, "3. Viabilidade Econômica:", ln=True)
-    pdf.set_font("Arial", "", 9)
-    for forn in fornecedores:
-        pot_prev = resultados['w'].get(forn)
-        lum_nome, pot_real, custo = buscar_custo(banco_luminarias, forn, pot_prev)
-        if custo:
-            # Garante que começa na margem esquerda (X=10)
-            pdf.set_x(10)
-            pdf.multi_cell(0, 7, f"- {forn}: Sugerida {lum_nome} ({pot_real}W) | Custo Unitário: R$ {custo:,.2f}", ln=True)
-
-    pdf.ln(10)
-    pdf.set_font("Arial", "I", 8)
-    pdf.multi_cell(0, 5, "Este relatório foi gerado por Inteligência Artificial baseado em dados históricos de simulações. Os resultados são estimativas e devem ser validados por projeto luminotécnico definitivo.")
-
-    return bytes(pdf.output())
-
-def gerar_pdf_lote(df):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
-    # ── PÁGINA 1: DASHBOARD EXECUTIVO
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.set_text_color(27, 54, 100)
-    pdf.cell(0, 10, "Relatório Executivo de Simulação em Lote", ln=True, align='C')
-    pdf.set_font("Arial", "", 10)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 10, f"Gerado em: {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
-    pdf.ln(10)
-
-    # KPIs Globais
-    pdf.set_fill_color(240, 244, 248)
-    pdf.set_font("Arial", "B", 12)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 10, "1. Resumo Consolidado (Performance Global)", ln=True)
-    pdf.set_font("Arial", "B", 9)
-    
-    # Cabeçalho da tabela de KPIs
-    pdf.cell(35, 8, "Fornecedor", 1, 0, 'C', True)
-    pdf.cell(50, 8, "CAPEX Total Est.", 1, 0, 'C', True)
-    pdf.cell(50, 8, "Economia Total", 1, 0, 'C', True)
-    pdf.cell(50, 8, "Conformidade NBR", 1, 1, 'C', True)
-
-    pdf.set_font("Arial", "", 9)
-    for forn in FORNECEDORES:
-        c_col = f'Custo Unitario (R$) - {forn}'
-        e_col = f'Economia (W) - {forn}'
-        s_col = f'Status NBR - {forn}'
-        
-        capex = df[c_col].sum() if c_col in df.columns else 0
-        eco_kw = (df[e_col].sum() / 1000) if e_col in df.columns else 0
-        conf = (df[s_col] == '✔ Atende').mean() * 100 if s_col in df.columns else 0
-        
-        pdf.cell(40, 8, forn, 1)
-        pdf.cell(50, 8, f"R$ {capex:,.2f}", 1, 0, 'C')
-        pdf.cell(50, 8, f"{eco_kw:,.1f} kW", 1, 0, 'C')
-        pdf.cell(45, 8, f"{conf:.1f}%", 1, 1, 'C')
-
-    pdf.ln(10)
-
-    # Mix de Vias
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 10, "2. Perfil do Inventário Simulado", ln=True)
-    pdf.set_font("Arial", "", 10)
-    if 'Classificacao (M/C/P)' in df.columns:
-        counts = df['Classificacao (M/C/P)'].value_counts()
-        for classe, qtd in counts.items():
-            pdf.cell(0, 7, f"- Classe {classe}: {qtd} pontos ({qtd/len(df)*100:.1f}%)", ln=True)
-    
-    pdf.ln(10)
-
-    # ── PÁGINAS SEGUINTES: LISTA COMPACTA
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 10, "3. Inventário Detalhado de Simulações", ln=True)
-    pdf.ln(5)
-    
-    # Cabeçalho da lista compacta (font reduzida)
-    pdf.set_font("Arial", "B", 7)
-    pdf.set_fill_color(230, 230, 230)
-    cols_lista = [
-        (10, "ID"), (15, "Classe"), (15, "Alt."), (15, "Dist."), 
-        (45, "LEDSTAR (W/Std)"), (45, "SX LIGHT. (W/Std)"), (45, "TECNOWATT (W/Std)")
-    ]
-    for w, t in cols_lista:
-        pdf.cell(w, 6, t, 1, 0, 'C', True)
-    pdf.ln()
-
-    pdf.set_font("Arial", "", 5.5) # Fonte um pouco menor para caber os 3
-    
-    # Identifica colunas de geometria de forma robusta
-    def find_col(df, text):
-        for col in df.columns:
-            if text.lower() in col.lower(): return col
-        return None
-
-    col_alt = find_col(df, 'Altura')
-    col_dist = find_col(df, 'distancia')
-
-    for idx, row in df.iterrows():
-        pdf.cell(10, 5, str(idx+1), 1, 0, 'C')
-        pdf.cell(15, 5, str(row.get('Classificacao (M/C/P)', '-')), 1, 0, 'C')
-        pdf.cell(15, 5, f"{row.get(col_alt, 0):.1f}" if col_alt else "0.0", 1, 0, 'C')
-        pdf.cell(15, 5, f"{row.get(col_dist, 0):.1f}" if col_dist else "0.0", 1, 0, 'C')
-        
-        for forn in FORNECEDORES:
-            # Busca a coluna de potência de forma flexível (evitando problemas de acento)
-            pot_col = None
-            for c in df.columns:
-                c_low = c.lower()
-                # Procura por 'prevista' ou 'nominal' + nome do fornecedor
-                if ('prevista' in c_low or 'nominal' in c_low) and forn.lower() in c_low:
-                    pot_col = c
-                    break
-            
-            std_col = f'Status NBR - {forn}'
-            p_val = row.get(pot_col, 0) if pot_col else 0
-            s_val = "OK" if row.get(std_col) == '✔ Atende' else "NA"
-            pdf.cell(45, 5, f"{p_val:.1f}W [{s_val}]", 1, 0, 'C')
-        pdf.ln()
-
-    return bytes(pdf.output())
-
-def gerar_template_lote():
-    cols = [
-        'ID', 'Classificacao (M/C/P)', 'Altura de Instalação', 'distancia entre poste',
-        'Largura da Via 1', 'projecao do braço', 'Posteação', 'Potencia Atual (W)'
-    ]
-    df_temp = pd.DataFrame(columns=cols)
-    # Linha de exemplo
-    df_temp.loc[0] = [1, 'M3', 10.0, 35.0, 7.0, 1.5, 'Unilateral', 250.0]
-    
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_temp.to_excel(writer, index=False)
-    return buffer.getvalue()
-
-def analisar_melhorias(forn, modelos, metricas_ativas, info_nbr, config_base, num_ok, cat_ok):
-    """Testa variações estruturais para tentar atingir a conformidade."""
-    sugestoes = []
-    reqs = {m: info_nbr.get(m) for m in metricas_ativas if m != 'w' and info_nbr.get(m) is not None}
-    if not reqs: return []
-
-    def verifica_atende(conf):
-        X_test = pd.DataFrame([{k: conf.get(k, np.nan) for k in num_ok + cat_ok}])
-        for m, req in reqs.items():
-            if m in modelos:
-                val = modelos[m].predict(X_test)[0]
-                if val < req: return False
-        return True
-
-    # 1. Tentar aumentar altura
-    for h_add in [1.0, 2.0]:
-        c = config_base.copy()
-        c['altura da luminaria'] += h_add
-        if 'Altura de Instalação' in c: c['Altura de Instalação'] += h_add
-        if 'Altura de Instalao' in c: c['Altura de Instalao'] += h_add
-        if verifica_atende(c):
-            sugestoes.append(f"📐 **Alteração Estrutural**: Aumentar a altura para **{c['altura da luminaria']:.1f}m**")
-            break
-            
-    # 2. Tentar braços discretos em ordem crescente de projeção
-    proj_atual = config_base.get('projecao do braço', 1.8)
-    for arm_name, arm_proj in BRACOS_ORDENADOS:
-        if arm_proj <= proj_atual:
-            continue  # só testa braços maiores que o atual
-        c = config_base.copy()
-        c['Braço Novo'] = arm_name
-        c['projecao do braço'] = arm_proj
-        if 'projecao do brao' in c: c['projecao do brao'] = arm_proj
-        if verifica_atende(c):
-            sugestoes.append(f"🏗️ **Ajuste de Braço**: Trocar para **{arm_name}** (projeção {arm_proj:.1f}m)")
-            break
-
-    # 3. Tentar reduzir distância
-    dist_atual = config_base['distancia entre postes']
-    for d_sub in [5.0, 10.0]:
-        if dist_atual - d_sub >= 10:
-            c = config_base.copy()
-            c['distancia entre postes'] -= d_sub
-            if verifica_atende(c):
-                sugestoes.append(f"📍 **Ajuste de Vão**: Reduzir a distância para **{c['distancia entre postes']:.1f}m**")
-                break
-                
-    # 4. Solução Drástica: Novo poste no meio (Ponto Escuro)
-    if not sugestoes and dist_atual >= 20:
-        c = config_base.copy()
-        c['distancia entre postes'] /= 2
-        if verifica_atende(c):
-            sugestoes.append(f"🔦 **Correção de Ponto Escuro**: Instalar poste intermediário (nova distância: **{c['distancia entre postes']:.1f}m**)")
-
-    return sugestoes
-
-def formatar_resultado_template(df_saida):
-    """
-    Transforma o DataFrame de saída (largo) em um formato longo (1 linha por fornecedor)
-    e mapeia para as colunas do template original.
-    """
-    rows = []
-    for idx, row in df_saida.iterrows():
-        for forn in FORNECEDORES:
-            new_row = {col: row.get(col, np.nan) for col in TEMPLATE_COLUMNS}
-            
-            # Identifica ID
-            new_row['ID'] = row.get('ID', idx + 1)
-            
-            # Mapeia inputs originais se existirem no df_saida
-            for original, interno in MAPEAMENTO_COLS.items():
-                if original in row:
-                    new_row[interno] = row[original]
-            
-            # Adiciona rastreabilidade e parâmetros extras pedida pelo usuário
-            for extra in [
-                'Padrão', 'Logradouro', 'latitude', 'longitude', 'Tipo de lâmpada', 
-                'qtd de Lampadas IP Princ', 'Faixas de Rodagem', 'Largura Via 1', 
-                'Largura Via 2', 'Largura Passeio 1', 'largura Passeio 2', 
-                'largura Canteiro Central', 'distancia Poste a via', 'Tipo de estrutura',
-                'Altura de Instalação'
-            ]:
-                if extra in row:
-                    new_row[extra] = row[extra]
-            
-            # Dados do Fornecedor e Predições
-            new_row['Fornecedor'] = forn
-            
-            # Mapeia métricas preditas
-            map_targets = {
-                'lmed': 'Luminância Média',
-                'uo': 'Fator de Uniformidade',
-                'ul': 'Uniformidade Longitudinal',
-                'emed': 'Iluminância Média',
-                'emin': 'Iluminância mínima horizontal E (lux)',
-                'w': ' Potência simulada - IP Principal (W)'
-            }
-            
-            for key, template_name in map_targets.items():
-                col_name = f'{TARGETS_MAP[key]} - {forn}'
-                if col_name in row:
-                    new_row[template_name] = row[col_name]
-            
-            # NBR Status e Requisitos
-            classe = str(row.get('Classificação viária', 'M3')).upper()
-            info_v = NBR5101.get(classe, {})
-            
-            new_row['Emed - Norma'] = info_v.get('emed', np.nan)
-            new_row['Luminância Média Exigida'] = info_v.get('lmed', np.nan)
-            new_row['Uo Uniformidade Global Exigida'] = info_v.get('uo', np.nan)
-            new_row['Uniformidade Longitudinal Exigida'] = info_v.get('ul', np.nan)
-            
-            status_col = f'Status NBR - {forn}'
-            if status_col in row:
-                status_txt = row[status_col]
-                new_row['Atendimento pleno à norma'] = 'Sim' if 'Atende' in status_txt and 'Não' not in status_txt else 'Não'
-                # Preenchimento redundante para outras colunas de status no template
-                new_row['ATENDE TUDO - RUA SIMU'] = new_row['Atendimento pleno à norma']
-                new_row['Atende à Iluminância Média'] = new_row['Atendimento pleno à norma']
-            
-            # Modelo Sugerido e Custos
-            new_row['Luminária Simulada (IP Principal)'] = row.get(f'Modelo Sugerido - {forn}', '')
-            new_row['Eficientização'] = row.get(f'Reducao (%) - {forn}', 0)
-            
-            rows.append(new_row)
-            
-    return pd.DataFrame(rows, columns=TEMPLATE_COLUMNS)
-
-
-def formatar_tabela_resultado(df_saida):
-    """
-    Formata o resultado no estilo da aba 'tabela dinamica' do BRDE04:
-    uma linha por (ponto × fornecedor), com as colunas operacionais principais.
-    """
-    col_pot_w = TARGETS_MAP['w']   # 'Potência (W)'
-    rows = []
-    for _, row in df_saida.iterrows():
-        for forn in FORNECEDORES:
-            rows.append({
-                'ID':                                    row.get('ID', ''),
-                'Logradouro':                            row.get('Logradouro', ''),
-                'latitude':                              row.get('latitude', np.nan),
-                'longitude':                             row.get('longitude', np.nan),
-                'Classificação viária':                  row.get('Classificação viária', ''),
-                'Potência Atual (W)':                    row.get('Potencia da lâmpada', np.nan),
-                'Fornecedor':                            forn,
-                'Código de Luminária':                   row.get(f'Modelo Sugerido - {forn}', ''),
-                'Potência Proposta (W)':                 row.get(f'{col_pot_w} - {forn}', np.nan),
-                'Braço Antigo':                          row.get('Braço Antigo', row.get('Braço Atual', '')),
-                'Braço Novo':                            row.get('Sugestão Braço Novo', ''),
-                'Tipo de CPE':                           row.get('Correção de Ponto Escuro (CPE)', 'Não'),
-                'Observação CPE':                        row.get('Observação CPE  (Reduçao entre postes e/ou Tipo de Posteação)', ''),
-                'Qtd. Pontos IP Veic':                   row.get('Quantidade de pontos inspecionados IP Veic', np.nan),
-                'Qtd. Pontos IP Sec':                    row.get('Quantidade de pontos inspecionados IP Sec', np.nan),
-                'Aumento de Pontos Proposto (Veículos)': row.get('Quantidade de pontos adicionados para via de veículo', 0),
-                'Status NBR':                            row.get(f'Status NBR - {forn}', ''),
-                'Economia (W)':                          row.get(f'Economia (W) - {forn}', np.nan),
-                'Redução (%)':                           row.get(f'Reducao (%) - {forn}', np.nan),
-            })
-    return pd.DataFrame(rows)
-
-
-def formatar_tabela_dinamica(df_saida):
-    """
-    Gera aba 'Tabela Dinâmica' no estilo do BRDE04:
-    agrupa por (Potência Atual, Classe de Iluminação, Fornecedor, Código da Luminária,
-    Potência Proposta, Braço Antigo, Braço Novo, Tipo de CPE,
-    Qtd IP Veic, Qtd IP Sec, Aumento Veículos, Aumento 2º Nível)
-    e conta o número de logradouros por combinação.
-    """
-    col_pot_w = TARGETS_MAP['w']
-    rows = []
-    for _, row in df_saida.iterrows():
-        # pd.isna necessário pois np.nan é truthy — 'or' simples não funciona com NaN
-        _ba  = row.get('Braço Antigo')
-        _ba2 = row.get('Braço Atual')
-        braco_antigo = (str(_ba).strip()  if pd.notna(_ba)  and str(_ba).strip()  else
-                        str(_ba2).strip() if pd.notna(_ba2) and str(_ba2).strip() else '')
-        _bn = row.get('Sugestão Braço Novo')
-        braco_novo_raw = str(_bn).strip() if pd.notna(_bn) else ''
-        braco_novo = braco_novo_raw if braco_novo_raw and braco_novo_raw != braco_antigo else ''
-
-        aum_veic = row.get('Quantidade de pontos adicionados para via de veículo', '')
-        aum_sec  = row.get('Quantidade de pontos adicionados para via de pedestres', '')
-        aum_veic = '' if pd.isna(aum_veic) or aum_veic == 0 else aum_veic
-        aum_sec  = '' if pd.isna(aum_sec)  or aum_sec  == 0 else aum_sec
-
-        cpe = str(row.get('Correção de Ponto Escuro (CPE)', '') or '')
-        cpe = '' if cpe.lower() in ('não', 'nao', 'no', '', 'nan', 'none') else cpe
-
-        pot_atual_raw = row.get('Potencia da lâmpada', np.nan)
-        pot_atual = int(round(pot_atual_raw)) if pd.notna(pot_atual_raw) and pot_atual_raw >= 1 else ''
-
-        qtd_veic = row.get('Quantidade de pontos inspecionados IP Veic', 0)
-        qtd_sec  = row.get('Quantidade de pontos inspecionados IP Sec', 0)
-        qtd_veic = 0 if pd.isna(qtd_veic) else int(qtd_veic)
-        qtd_sec  = 0 if pd.isna(qtd_sec)  else int(qtd_sec)
-
-        for forn in FORNECEDORES:
-            pot_prop_raw = row.get(f'{col_pot_w} - {forn}', np.nan)
-            pot_prop = int(round(pot_prop_raw)) if pd.notna(pot_prop_raw) else ''
-            codigo = str(row.get(f'Modelo Sugerido - {forn}', '') or '').strip()
-            rows.append({
-                'Potência Atual':                                pot_atual,
-                'Classe de Iluminação':                          row.get('Classificação viária', ''),
-                'Fornecedor':                                    forn,
-                'Código da Luminária':                           codigo,
-                'Potência Proposta':                             pot_prop,
-                'Braço Antigo':                                  braco_antigo,
-                'Braço Novo':                                    braco_novo,
-                'Tipo de CPE':                                   cpe,
-                'Quantidade de pontos inspecionados IP Veic':    qtd_veic,
-                'Quantidade de pontos inspecionados IP Sec':     qtd_sec,
-                'Aumento de pontos proposto (via de veículos)':  aum_veic,
-                'Aumento de pontos proposto (segundo nível)':    aum_sec,
-            })
-
-    df_flat = pd.DataFrame(rows)
-    group_cols = [
-        'Potência Atual', 'Classe de Iluminação', 'Fornecedor', 'Código da Luminária',
-        'Potência Proposta', 'Braço Antigo', 'Braço Novo', 'Tipo de CPE',
-        'Quantidade de pontos inspecionados IP Veic',
-        'Quantidade de pontos inspecionados IP Sec',
-        'Aumento de pontos proposto (via de veículos)',
-        'Aumento de pontos proposto (segundo nível)',
-    ]
-    df_flat[group_cols] = df_flat[group_cols].fillna('').astype(str)
-    df_grouped = (
-        df_flat.groupby(group_cols, sort=True)
-               .size()
-               .reset_index(name='Sum of Número de logradouros')
-    )
-    # Converte de volta colunas numéricas que foram stringificadas
-    for col in ['Potência Atual', 'Potência Proposta',
-                'Quantidade de pontos inspecionados IP Veic',
-                'Quantidade de pontos inspecionados IP Sec']:
-        df_grouped[col] = pd.to_numeric(df_grouped[col], errors='coerce')
-    return df_grouped
-
 
 # Métricas ativas baseadas na subclasse NBR 5101
 metricas_ativas = NBR5101.get(subclasse, {}).get('metricas', ['emed', 'w'])
@@ -1450,7 +662,8 @@ with tab_individual:
         'Projeção (m)': projecao_braco,
     }
     
-    pdf_bytes = gerar_pdf(FORNECEDORES, resultados, info_nbr, inputs_dict, banco_luminarias, sugestoes_por_forn, addr)
+    pdf_bytes = gerar_pdf(FORNECEDORES, resultados, info_nbr, inputs_dict, banco_luminarias,
+                         sugestoes_por_forn, metricas_confiaveis, addr)
     
     st.download_button(
         label="📥 Baixar Relatório Técnico (PDF)",
@@ -2216,17 +1429,6 @@ with tab_dash:
         else:
             st.warning('Coluna "Classificação viária" não encontrada para análise por via.')
 
-        # ── Botão de Exportação PDF de Lote (desabilitado temporariamente)
-        # st.markdown("---")
-        # pdf_lote_bytes = gerar_pdf_lote(df)
-        # st.download_button(
-        #     label="📥 Baixar Relatório Executivo de Lote (PDF)",
-        #     data=pdf_lote_bytes,
-        #     file_name=f"Relatorio_Executivo_Lote.pdf",
-        #     mime="application/pdf",
-        #     type="primary",
-        #     use_container_width=True
-        # )
 
 # ── Info do modelo ─────────────────────────────────────────────────────────────
 with st.expander('ℹ️ Métricas dos Modelos Treinados'):
